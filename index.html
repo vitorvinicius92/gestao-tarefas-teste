@@ -165,8 +165,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
-const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
+const SUPABASE_URL = "https://werchlgurtcsivgkhyqg.supabase.co";
+const SUPABASE_KEY = "sb_publishable_pckkUzxE7uGvW2mpezmPnw_F5JBiAYH";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
 let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [] };
@@ -310,17 +310,23 @@ function computePerformance(userId){
   const tasks = tasksFor(userId);
   const concluidas = tasks.filter(t => t.status === "concluida" && t.concluido_em);
   if(!concluidas.length) return null;
-  let positivas = 0, negativas = 0;
+  const BASE = { Alta:100, Média:75, Baixa:50 };
+  const ANTES = { Alta:200, Média:150, Baixa:100 };
+  const ATRASO = { Alta:50, Média:38, Baixa:25 };
+  let ganho = 0, referencia = 0;
   concluidas.forEach(t => {
     const prazoEfetivo = new Date(t.prazo+"T00:00:00");
     prazoEfetivo.setDate(prazoEfetivo.getDate() + (t.dias_pausados||0));
     const concluido = new Date(t.concluido_em.slice(0,10)+"T00:00:00");
-    if(concluido <= prazoEfetivo) positivas++; else negativas++;
+    const base = BASE[t.prioridade] || 75;
+    referencia += base;
+    if(concluido.getTime() < prazoEfetivo.getTime()) ganho += (ANTES[t.prioridade] || base*2);
+    else if(concluido.getTime() === prazoEfetivo.getTime()) ganho += base;
+    else ganho += (ATRASO[t.prioridade] || base*0.5);
   });
-  const total = positivas + negativas;
-  if(!total) return null;
-  const pct = Math.round(((positivas - negativas) / total) * 100);
-  return { pct, total: concluidas.length, positivas, negativas };
+  if(!referencia) return null;
+  const pct = Math.round((ganho / referencia) * 100);
+  return { pct, total: concluidas.length };
 }
 function currentUser(){ return getUser(STATE.currentUserId); }
 function go(screen){ STATE.screen = screen; render(); window.scrollTo(0,0); }
