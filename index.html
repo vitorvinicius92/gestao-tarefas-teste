@@ -165,11 +165,11 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const SUPABASE_URL = "https://werchlgurtcsivgkhyqg.supabase.co";
-const SUPABASE_KEY = "sb_publishable_pckkUzxE7uGvW2mpezmPnw_F5JBiAYH";
+const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
+const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
-let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [] };
+let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [] };
 let SESSION = null;
 let deviosChart = null;
 let STATE = {
@@ -180,7 +180,8 @@ let STATE = {
   equipeSub: "tarefas",
   view: "kanban",
   filterLiderado: "todos",
-  filterStatus: "todos",
+  filterStatusMulti: [],
+  statusFilterOpen: false,
   avaliacaoLiderado: null,
   notifOpen: false,
   openTaskId: null,
@@ -189,6 +190,9 @@ let STATE = {
   taskImpedimentoOpen: false,
   photoUploadTarget: null,
   spotlightEquipe: null,
+  reprogramarOpen: null,
+  reprogramacaoRecusarOpen: null,
+  chatEquipeAtiva: null,
   navOpen: false,
   busy: false,
   submitting: false
@@ -232,7 +236,7 @@ async function loadPublicOrg(){
   if(!es.error) DB.especialidades = es.data || [];
 }
 async function loadAll(){
-  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub] = await Promise.all([
+  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg] = await Promise.all([
     sb.from("usuarios").select("*"),
     sb.from("tarefas").select("*"),
     sb.from("comentarios_tarefa").select("*"),
@@ -247,7 +251,9 @@ async function loadAll(){
     sb.from("ferias").select("*").order("data_inicio", { ascending:true }),
     sb.from("historico_alteracoes").select("*"),
     sb.from("escalas").select("*").order("data_inicio", { ascending:true }),
-    sb.from("subtarefas").select("*")
+    sb.from("subtarefas").select("*"),
+    sb.from("reprogramacoes").select("*"),
+    sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true })
   ]);
   DB.usuarios = u.data || [];
   DB.tarefas = t.data || [];
@@ -264,6 +270,8 @@ async function loadAll(){
   DB.historico = hi.data || [];
   DB.escalas = esc_.data || [];
   DB.subtarefas = sub.data || [];
+  DB.reprogramacoes = rep.data || [];
+  DB.mensagens = msg.data || [];
   rankingCache = {};
 }
 
@@ -325,7 +333,7 @@ function computePerformance(userId){
     else ganho += (ATRASO[t.prioridade] || base*0.5);
   });
   if(!referencia) return null;
-  const pct = Math.round((ganho / referencia) * 100);
+  const pct = Math.max(0, Math.min(100, Math.round((ganho / referencia) * 100)));
   return { pct, total: concluidas.length };
 }
 function currentUser(){ return getUser(STATE.currentUserId); }
@@ -366,9 +374,11 @@ function render(){
   else if(STATE.screen === "equipes") app.innerHTML = cu ? renderShell(cu, "equipes", "Equipes", renderEquipesContent()) : renderMenu();
   else if(STATE.screen === "mapa") app.innerHTML = cu ? renderShell(cu, "mapa", "Mapa da Equipe", renderMapaEquipeContent(cu)) : renderMenu();
   else if(STATE.screen === "escala") app.innerHTML = cu ? renderShell(cu, "escala", "Minha Escala", renderEscalaContent(cu)) : renderMenu();
+  else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
   if(STATE.openTaskId){ document.body.insertAdjacentHTML("beforeend", renderTaskModal()); }
   if(STATE.screen === "main" && STATE.tab === "equipe" && STATE.equipeSub === "desvios"){ setTimeout(renderDeviosChart, 0); }
+  if(STATE.screen === "chat"){ setTimeout(() => { const box = document.getElementById("chat-scroll"); if(box) box.scrollTop = box.scrollHeight; }, 0); }
 }
 
 function renderShell(cu, activeKey, pageTitle, contentHtml){
@@ -381,6 +391,7 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"escala", label:"Minha Escala", icon:"&#128197;" },
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
     ...(hasTeam ? [{ key:"mapa", label:"Mapa da Equipe", icon:"&#128506;" }] : []),
+    ...(getEquipesRelevantes(cu).length ? [{ key:"chat", label:"Chat da Equipe", icon:"&#128172;" }] : []),
     { key:"kanban", label:"Kanban", icon:"&#128202;" },
     { key:"org", label:"Organograma", icon:"&#9776;" },
     { key:"equipes", label:"Equipes", icon:"&#127959;" },
@@ -426,6 +437,7 @@ function goSection(key){
   else if(key === "equipes") go("equipes");
   else if(key === "mapa") go("mapa");
   else if(key === "escala") go("escala");
+  else if(key === "chat") go("chat");
   else if(key === "perfil") go("perfil");
 }
 function renderDashboard(cu){
@@ -611,6 +623,49 @@ function escalaStatus(e){
   if(hoje < e.data_inicio) return { label:"Agendada", cls:"accent" };
   if(hoje > e.data_fim) return { label:"Concluída", cls:"muted" };
   return { label:"Alocado", cls:"ok" };
+}
+function renderChatContent(cu){
+  const equipeIds = getEquipesRelevantes(cu);
+  if(!equipeIds.length) return `<h1 style="margin-bottom:4px;">Chat da Equipe</h1><p class="empty-hint">Você ainda não está ligado a nenhuma equipe.</p>`;
+  if(!STATE.chatEquipeAtiva || !equipeIds.includes(STATE.chatEquipeAtiva)) STATE.chatEquipeAtiva = equipeIds[0];
+  const equipeId = STATE.chatEquipeAtiva;
+  const mensagens = DB.mensagens.filter(m => m.equipe_id === equipeId).sort((a,b)=>new Date(a.criado_em)-new Date(b.criado_em));
+
+  return `<h1 style="margin-bottom:4px;">Chat da Equipe</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Converse com quem está na mesma equipe (e com quem gerencia ela).</p>
+  ${equipeIds.length > 1 ? `<div class="tabs" style="margin-top:0;">
+    ${equipeIds.map(id => `<button class="small ${equipeId===id?'active':''}" onclick="STATE.chatEquipeAtiva='${id}';render()">${esc(equipeNome(id)||'Equipe')}</button>`).join("")}
+  </div>` : `<p style="font-weight:700;margin-bottom:10px;">${esc(equipeNome(equipeId)||'Equipe')}</p>`}
+
+  <div class="card" style="display:flex;flex-direction:column;height:60vh;">
+    <div id="chat-scroll" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:4px;margin-bottom:10px;">
+      ${mensagens.length ? mensagens.map(m => {
+        const autor = getUser(m.usuario_id);
+        const minha = m.usuario_id === cu.id;
+        return `<div class="msg" style="${minha?'flex-direction:row-reverse;':''}">
+          ${avatarHtml(autor,26)}
+          <div class="msg-bubble" style="${minha?'background:var(--accent-bg);':''}max-width:75%;">
+            <div style="font-size:11px;font-weight:700;margin-bottom:2px;">${autor?esc(autor.nome):"?"}</div>
+            <div style="font-size:13px;">${esc(m.texto)}</div>
+            <div class="muted-text" style="font-size:10.5px;margin-top:2px;">${formatQuando(m.criado_em)}</div>
+          </div>
+        </div>`;
+      }).join("") : `<p class="empty-hint">Nenhuma mensagem ainda — comece a conversa.</p>`}
+    </div>
+    <div class="row">
+      <input id="chat-input" placeholder="Escrever mensagem" style="flex:1;" onkeydown="if(event.key==='Enter'){event.preventDefault();sendMensagemEquipe('${equipeId}');}" />
+      <button aria-label="Enviar" onclick="sendMensagemEquipe('${equipeId}')">&#10148;</button>
+    </div>
+  </div>`;
+}
+async function sendMensagemEquipe(equipeId){
+  const input = document.getElementById("chat-input");
+  const texto = input.value.trim();
+  if(!texto) return;
+  input.value = "";
+  await mutate(sb.from("mensagens_equipe").insert({ equipe_id: equipeId, usuario_id: STATE.currentUserId, texto }));
+  render();
+  setTimeout(() => { const box = document.getElementById("chat-scroll"); if(box) box.scrollTop = box.scrollHeight; }, 0);
 }
 function renderEscalaContent(cu){
   const atual = getAlocacaoAtual(cu.id);
@@ -964,6 +1019,8 @@ function setupRealtime(){
     .on("postgres_changes", { event:"*", schema:"public", table:"comentarios_tarefa" }, handleRealtimeChange)
     .on("postgres_changes", { event:"*", schema:"public", table:"notificacoes" }, handleRealtimeChange)
     .on("postgres_changes", { event:"*", schema:"public", table:"ferias" }, handleRealtimeChange)
+    .on("postgres_changes", { event:"*", schema:"public", table:"reprogramacoes" }, handleRealtimeChange)
+    .on("postgres_changes", { event:"*", schema:"public", table:"mensagens_equipe" }, handleRealtimeChange)
     .subscribe();
 }
 function teardownRealtime(){
@@ -1729,20 +1786,36 @@ document.getElementById("hidden-photo-input").addEventListener("change", async f
 // ---------- Views ----------
 const STATUS_FILTER_OPTS = ["a_fazer","em_andamento","concluida","impedida","cancelada"];
 function applyStatusFilter(tasks){
-  if(!STATE.filterStatus || STATE.filterStatus === "todos") return tasks.filter(t => t.status !== "cancelada");
-  return tasks.filter(t => t.status === STATE.filterStatus);
+  if(!STATE.filterStatusMulti || !STATE.filterStatusMulti.length) return tasks.filter(t => t.status !== "cancelada");
+  return tasks.filter(t => STATE.filterStatusMulti.includes(t.status));
+}
+function toggleStatusFilter(s){
+  const idx = STATE.filterStatusMulti.indexOf(s);
+  if(idx >= 0) STATE.filterStatusMulti.splice(idx, 1); else STATE.filterStatusMulti.push(s);
+  render();
+}
+function renderStatusFilterPanel(){
+  return `<div class="card" style="position:absolute;right:0;top:38px;z-index:15;width:230px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);">
+    ${STATUS_FILTER_OPTS.map(s => `<label class="row" style="gap:8px;padding:6px 2px;cursor:pointer;">
+      <input type="checkbox" style="width:auto;flex-shrink:0;" ${STATE.filterStatusMulti.includes(s)?'checked':''} onchange="toggleStatusFilter('${s}')" />
+      <span style="font-size:13px;">${statusLabel(s)}</span>
+    </label>`).join("")}
+    ${STATE.filterStatusMulti.length ? `<button class="small ghost" style="width:100%;margin-top:6px;" onclick="STATE.filterStatusMulti=[];render()">Limpar filtro</button>` : ""}
+  </div>`;
 }
 function renderViewSwitcher(){
+  const n = STATE.filterStatusMulti.length;
+  const label = n ? `${n} status selecionado${n>1?'s':''}` : "Todos os status";
   return `<div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;margin:0 0 14px;">
     <div class="tabs" style="margin:0;">
       <button class="small ${STATE.view==='kanban'?'active':''}" onclick="setView('kanban')">Kanban</button>
       <button class="small ${STATE.view==='lista'?'active':''}" onclick="setView('lista')">Lista</button>
       <button class="small ${STATE.view==='prioridade'?'active':''}" onclick="setView('prioridade')">Quadro de prioridades</button>
     </div>
-    <select style="width:auto;" onchange="STATE.filterStatus=this.value;render()">
-      <option value="todos" ${(!STATE.filterStatus||STATE.filterStatus==='todos')?'selected':''}>Todos os status</option>
-      ${STATUS_FILTER_OPTS.map(s=>`<option value="${s}" ${STATE.filterStatus===s?'selected':''}>${statusLabel(s)}</option>`).join("")}
-    </select>
+    <div style="position:relative;">
+      <button class="small" onclick="STATE.statusFilterOpen=!STATE.statusFilterOpen;render()">${esc(label)} &#9662;</button>
+      ${STATE.statusFilterOpen ? renderStatusFilterPanel() : ""}
+    </div>
   </div>`;
 }
 function badgeHtml(t){ const f = farolInfo(t); return `<span class="badge ${f.cls}">${f.label}</span>`; }
@@ -1830,6 +1903,87 @@ async function salvarInstrucao(taskId){
   await mutate(sb.from("tarefas").update({ instrucao: val }).eq("id", taskId));
   openTask(taskId);
 }
+function renderReprogramacao(t, isOwner, isAncestorOfOwner){
+  const pendente = DB.reprogramacoes.find(r => r.tarefa_id === t.id && r.status === "pendente");
+  const historico = DB.reprogramacoes.filter(r => r.tarefa_id === t.id && r.status !== "pendente")
+    .sort((a,b) => new Date(b.decidido_em||b.criado_em) - new Date(a.decidido_em||a.criado_em)).slice(0,2);
+
+  let html = "";
+  if(pendente){
+    const solicitante = getUser(pendente.solicitado_por);
+    if(isAncestorOfOwner){
+      html += `<div class="card" style="background:var(--accent-bg);border-color:#f0cfa8;margin-bottom:14px;">
+        <p style="font-size:12px;font-weight:700;color:var(--accent-text);margin:0 0 6px;">&#128197; Reprogramação solicitada por ${solicitante?esc(solicitante.nome):"?"}</p>
+        <p style="font-size:13px;margin:0 0 4px;"><span class="mono">${fmtDate(pendente.prazo_atual)}</span> &#8594; <span class="mono">${fmtDate(pendente.prazo_sugerido)}</span></p>
+        <p style="font-size:12.5px;color:var(--text-2);margin:0 0 10px;">"${esc(pendente.justificativa)}"</p>
+        ${STATE.reprogramacaoRecusarOpen === pendente.id ? `
+          <label class="field-label">Novo prazo (opcional, senão mantém o atual)</label>
+          <input id="reprog-novo-prazo" type="date" style="margin-bottom:8px;" />
+          <label class="field-label">Motivo da recusa</label>
+          <textarea id="reprog-resposta" rows="2" style="margin-bottom:8px;" placeholder="Explique por que não pode ser essa data"></textarea>
+          <div class="row"><button class="ghost" onclick="STATE.reprogramacaoRecusarOpen=null;render()">Cancelar</button><button class="primary" onclick="recusarReprogramacao('${pendente.id}','${t.id}')">Confirmar recusa</button></div>
+        ` : `<div class="row"><button class="ghost" onclick="STATE.reprogramacaoRecusarOpen='${pendente.id}';render()">Recusar</button><button class="primary" onclick="aprovarReprogramacao('${pendente.id}','${t.id}')">Aprovar novo prazo</button></div>`}
+      </div>`;
+    } else if(isOwner){
+      html += `<div class="card" style="background:var(--surface-2);margin-bottom:14px;">
+        <p style="font-size:12.5px;margin:0;">&#8987; Você pediu pra mudar o prazo pra <span class="mono">${fmtDate(pendente.prazo_sugerido)}</span> — aguardando seu líder aprovar.</p>
+      </div>`;
+    }
+  } else if(isOwner && ["a_fazer","em_andamento","impedida"].includes(t.status)){
+    html += STATE.reprogramarOpen === t.id ? `<div class="card" style="margin-bottom:14px;">
+      <p style="font-size:13px;font-weight:700;margin:0 0 8px;">Reprogramar prazo</p>
+      <label class="field-label">Novo prazo sugerido</label>
+      <input id="reprog-prazo-input" type="date" style="margin-bottom:8px;" />
+      <label class="field-label">Justificativa</label>
+      <textarea id="reprog-justificativa" rows="2" style="margin-bottom:10px;" placeholder="Por que precisa mudar o prazo?"></textarea>
+      <div class="row"><button class="ghost" onclick="STATE.reprogramarOpen=null;render()">Cancelar</button><button class="primary" onclick="solicitarReprogramacao('${t.id}')">Enviar pro líder</button></div>
+    </div>` : `<button style="width:100%;margin-bottom:14px;" onclick="STATE.reprogramarOpen='${t.id}';render()"><span style="margin-right:6px;">&#128197;</span>Reprogramar prazo</button>`;
+  }
+
+  if(historico.length){
+    html += `<div style="margin-bottom:14px;">${historico.map(r => `<p class="muted-text" style="font-size:11px;margin:2px 0;">
+      ${r.status==='aprovada'?'&#10003;':'&#10005;'} Reprogramação ${r.status==='aprovada'?'aprovada':'recusada'}: ${fmtDate(r.prazo_atual)} &#8594; ${fmtDate(r.prazo_sugerido)}${r.resposta_gestor?' — "'+esc(r.resposta_gestor)+'"':''}
+    </p>`).join("")}</div>`;
+  }
+  return html;
+}
+async function solicitarReprogramacao(taskId){
+  const novoPrazo = document.getElementById("reprog-prazo-input").value;
+  const justificativa = document.getElementById("reprog-justificativa").value.trim();
+  if(!novoPrazo || !justificativa) return;
+  const t = DB.tarefas.find(x => x.id === taskId);
+  const cu = currentUser();
+  const ok = await mutate(sb.from("reprogramacoes").insert({
+    tarefa_id: taskId, solicitado_por: cu.id, prazo_atual: t.prazo, prazo_sugerido: novoPrazo, justificativa
+  }));
+  if(ok && cu.lider_id) await addNotif(cu.lider_id, "reprogramacao_solicitada", `${cu.nome} pediu pra mudar o prazo de "${t.titulo}"`);
+  STATE.reprogramarOpen = null;
+  await loadAll(); openTask(taskId);
+}
+async function aprovarReprogramacao(reprogId, taskId){
+  const r = DB.reprogramacoes.find(x => x.id === reprogId);
+  const okTarefa = await mutate(sb.from("tarefas").update({ prazo: r.prazo_sugerido }).eq("id", taskId));
+  if(okTarefa){
+    await sb.from("reprogramacoes").update({ status:"aprovada", decidido_por: STATE.currentUserId, decidido_em: new Date().toISOString() }).eq("id", reprogId);
+    const t = DB.tarefas.find(x => x.id === taskId);
+    if(t) await addNotif(t.atribuido_a, "reprogramacao_aprovada", `Seu novo prazo pra "${t.titulo}" foi aprovado: ${fmtDate(r.prazo_sugerido)}`);
+  }
+  await loadAll(); openTask(taskId);
+}
+async function recusarReprogramacao(reprogId, taskId){
+  const novoPrazo = document.getElementById("reprog-novo-prazo").value;
+  const resposta = document.getElementById("reprog-resposta").value.trim();
+  const ok = await mutate(sb.from("reprogramacoes").update({
+    status:"recusada", resposta_gestor: resposta, decidido_por: STATE.currentUserId, decidido_em: new Date().toISOString()
+  }).eq("id", reprogId));
+  if(ok && novoPrazo){
+    await sb.from("tarefas").update({ prazo: novoPrazo }).eq("id", taskId);
+  }
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(ok && t) await addNotif(t.atribuido_a, "reprogramacao_recusada", `Seu pedido de novo prazo pra "${t.titulo}" foi recusado`);
+  STATE.reprogramacaoRecusarOpen = null;
+  await loadAll(); openTask(taskId);
+}
 function renderChecklist(taskId){
   const itens = DB.subtarefas.filter(s => s.tarefa_id === taskId).sort((a,b)=>new Date(a.criado_em)-new Date(b.criado_em));
   const total = itens.length;
@@ -1904,6 +2058,7 @@ function renderTaskModal(){
           <option value="em_andamento" ${t.status==='em_andamento'?'selected':''}>Em andamento</option>
           <option value="concluida" ${t.status==='concluida'?'selected':''}>Concluída</option>
         </select>` : ""}
+      ${renderReprogramacao(t, isOwner, isAncestorOfOwner)}
       ${isLeaderOfOwner && t.status === "impedida" ? `
         <button class="primary" style="width:100%;margin-bottom:14px;" onclick="resolverImpedimento('${t.id}')">Marcar impedimento como resolvido</button>` : ""}
       ${isAncestorOfOwner && ["a_fazer","em_andamento","impedida"].includes(t.status) ? `
