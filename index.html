@@ -79,6 +79,24 @@
   }
   .topbar{display:flex;justify-content:space-between;align-items:center;padding:13px 20px;background:var(--steel-900);position:sticky;top:0;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,.15);border-bottom:3px solid transparent;border-image:linear-gradient(90deg,var(--brand-green),var(--brand-gold),var(--brand-blue)) 1;}
   .brand-stripe{height:5px;background:linear-gradient(90deg,var(--brand-green),var(--brand-gold),var(--brand-blue));}
+  .auth-shell{display:flex;min-height:100vh;}
+  .auth-hero{flex:1.1;background:linear-gradient(135deg,var(--steel-900) 0%,#12283f 55%,var(--brand-blue) 130%);color:#fff;padding:56px 48px;display:none;flex-direction:column;justify-content:center;position:relative;overflow:hidden;}
+  .auth-hero::before{content:'';position:absolute;inset:0;background-image:radial-gradient(circle at 20% 20%, rgba(255,255,255,.06) 0, transparent 40%),radial-gradient(circle at 85% 75%, rgba(255,255,255,.05) 0, transparent 45%);}
+  .auth-hero-inner{position:relative;z-index:1;max-width:480px;}
+  .auth-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:6px 14px;font-size:12px;font-weight:700;margin:0 8px 8px 0;}
+  .auth-stats{display:flex;gap:14px;margin-top:36px;flex-wrap:wrap;}
+  .auth-stat-card{background:rgba(255,255,255,.07);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:14px 18px;min-width:150px;}
+  .auth-panel-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);min-height:100vh;}
+  .auth-card{background:var(--surface);border-radius:20px;box-shadow:0 20px 50px rgba(0,0,0,.08);padding:36px 32px;max-width:400px;width:100%;}
+  .input-icon-wrap{position:relative;margin-bottom:14px;}
+  .input-icon-wrap input{padding-left:38px;}
+  .input-icon-wrap .icon-left{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-3);font-size:14px;pointer-events:none;}
+  .input-icon-wrap .icon-right{position:absolute;right:6px;top:50%;transform:translateY(-50%);cursor:pointer;background:none;border:none;box-shadow:none;padding:6px;font-size:14px;color:var(--text-3);}
+  .btn-cta{width:100%;background:linear-gradient(90deg,var(--brand-blue),#0d3f73);color:#fff;border:none;padding:13px;font-size:14px;font-weight:700;border-radius:10px;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 0 #0a2f57;}
+  .btn-cta:hover{filter:brightness(1.08);}
+  .auth-divider{display:flex;align-items:center;gap:10px;margin:16px 0;color:var(--text-3);font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
+  .auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border);}
+  @media(min-width:900px){ .auth-hero{display:flex;} }
   .topbar .muted-text{color:#8fa0b5;}
   .topbar button.ghost{color:#e7ebf0;}
   .topbar button.ghost:hover{background:var(--steel-800);}
@@ -89,7 +107,10 @@
   h3{font-size:13.5px;font-weight:800;margin:0;text-transform:uppercase;letter-spacing:.03em;color:var(--text-2);}
   .muted-text{color:var(--text-2);font-size:12.5px;}
   .mono{font-family:var(--mono);font-size:11.5px;color:var(--text-3);}
-  .kanban-col{display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:var(--radius-lg);padding:12px;min-height:80px;}
+  .kanban-col{display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:var(--radius-lg);padding:12px;min-height:80px;transition:background .12s,box-shadow .12s;}
+  .kanban-col-dragover{background:var(--accent-bg)!important;box-shadow:inset 0 0 0 2px var(--accent);}
+  .task-card[draggable="true"]{cursor:grab;}
+  .task-card[draggable="true"]:active{cursor:grabbing;}
   .kanban-col-header{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 6px;}
   .kanban-col-title{font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text-2);}
   .kanban-col-count{background:var(--steel-900);color:#fff;font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:20px;}
@@ -165,8 +186,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const SUPABASE_URL = "https://werchlgurtcsivgkhyqg.supabase.co";
-const SUPABASE_KEY = "sb_publishable_pckkUzxE7uGvW2mpezmPnw_F5JBiAYH";
+const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
+const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
 let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [] };
@@ -193,6 +214,7 @@ let STATE = {
   reprogramarOpen: null,
   reprogramacaoRecusarOpen: null,
   chatEquipeAtiva: null,
+  searchOpen: false,
   navOpen: false,
   busy: false,
   submitting: false
@@ -377,7 +399,9 @@ function render(){
   else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
   if(STATE.openTaskId){ document.body.insertAdjacentHTML("beforeend", renderTaskModal()); }
+  if(STATE.searchOpen){ document.body.insertAdjacentHTML("beforeend", renderGlobalSearchOverlay()); }
   if(STATE.screen === "main" && STATE.tab === "equipe" && STATE.equipeSub === "desvios"){ setTimeout(renderDeviosChart, 0); }
+  if(STATE.screen === "dashboard" && cu){ setTimeout(() => renderWeeklyChart(cu), 0); }
   if(STATE.screen === "chat"){ setTimeout(() => { const box = document.getElementById("chat-scroll"); if(box) box.scrollTop = box.scrollHeight; }, 0); }
 }
 
@@ -418,9 +442,12 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
       <div class="top-header">
         <button class="ghost hamburger-btn" onclick="STATE.navOpen=true;render()" aria-label="Abrir menu">&#9776;</button>
         <span style="font-weight:700;font-size:14px;">${esc(pageTitle)}</span>
-        <button class="ghost" style="position:relative;" onclick="toggleNotif()" aria-label="Notificações">
-          &#128276;${unread ? `<span style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--danger);"></span>` : ""}
-        </button>
+        <div class="row">
+          <button class="ghost" onclick="toggleGlobalSearch()" aria-label="Buscar">&#128269;</button>
+          <button class="ghost" style="position:relative;" onclick="toggleNotif()" aria-label="Notificações">
+            &#128276;${unread ? `<span style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--danger);"></span>` : ""}
+          </button>
+        </div>
       </div>
       ${STATE.notifOpen ? renderNotifDrop(notifs) : ""}
       <div class="container" style="margin:0;max-width:none;">${contentHtml}</div>
@@ -450,19 +477,37 @@ function renderDashboard(cu){
   const hora = new Date().getHours();
   const saudacao = hora < 12 ? "Bom dia" : (hora < 18 ? "Boa tarde" : "Boa noite");
   const primeiroNome = cu.nome.split(" ")[0];
+  const dataFormatada = new Date().toLocaleDateString("pt-BR", { day:"numeric", month:"long", year:"numeric" });
+  const diaSemana = new Date().toLocaleDateString("pt-BR", { weekday:"long" });
+
+  const statCard = (icon, color, bg, value, label) => `<div style="background:var(--surface-2);border-radius:12px;padding:14px 12px;">
+    <div style="width:30px;height:30px;border-radius:9px;background:${bg};display:flex;align-items:center;justify-content:center;font-size:15px;margin-bottom:8px;">${icon}</div>
+    <div style="font-size:22px;font-weight:800;color:${color};">${value}</div>
+    <p class="muted-text" style="margin:0;">${label}</p>
+  </div>`;
 
   const main = `
-    <h1 style="margin-bottom:4px;">${saudacao}, ${esc(primeiroNome)}! &#128075;</h1>
-    <p class="muted-text" style="margin-bottom:20px;">Acompanhe o progresso das suas tarefas e da sua equipe.</p>
+    <div class="row" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+      <div>
+        <h1 style="margin-bottom:4px;">${saudacao}, ${esc(primeiroNome)}! &#128075;</h1>
+        <p class="muted-text" style="margin:0;">${esc(dataFormatada)} · ${esc(diaSemana)}</p>
+      </div>
+      <button class="primary" onclick="goSection('minhas');STATE.showProposeForm=true;render()">+ Nova tarefa</button>
+    </div>
+    <p class="muted-text" style="margin:8px 0 20px;">Acompanhe o progresso das suas tarefas e da sua equipe.</p>
+    <div class="grid3" style="gap:10px;margin-bottom:16px;">
+      ${statCard("&#9989;","var(--ok)","var(--ok-bg)",concluidas,"Concluída(s)")}
+      ${statCard("&#9203;","var(--info)","var(--info-bg)",andamento,"Em andamento")}
+      ${statCard("&#128203;","var(--text)","var(--surface)",afazer,"A fazer")}
+      ${statCard("&#9888;","var(--danger)","var(--danger-bg)",atrasadas,"Atrasada(s)")}
+    </div>
     <div class="card" style="margin-bottom:16px;">
       <p class="muted-text" style="margin-bottom:8px;">Minha performance</p>
-      <div class="row" style="align-items:center;gap:20px;flex-wrap:wrap;">
+      <div class="row" style="align-items:center;gap:24px;flex-wrap:wrap;">
         ${perf ? `<div style="flex-shrink:0;width:220px;">${gaugeSvg(perf.pct)}</div>` : `<p class="empty-hint" style="flex-shrink:0;width:220px;">Sem tarefas concluídas ainda.</p>`}
-        <div class="grid3" style="flex:1;min-width:220px;gap:8px;">
-          <div style="background:var(--surface-2);border-radius:10px;text-align:center;padding:12px 6px;"><div style="font-size:20px;font-weight:800;color:var(--ok);">${concluidas}</div><p class="muted-text" style="margin:0;">Concluída(s)</p></div>
-          <div style="background:var(--surface-2);border-radius:10px;text-align:center;padding:12px 6px;"><div style="font-size:20px;font-weight:800;color:var(--info);">${andamento}</div><p class="muted-text" style="margin:0;">Em andamento</p></div>
-          <div style="background:var(--surface-2);border-radius:10px;text-align:center;padding:12px 6px;"><div style="font-size:20px;font-weight:800;">${afazer}</div><p class="muted-text" style="margin:0;">A fazer</p></div>
-          <div style="background:var(--surface-2);border-radius:10px;text-align:center;padding:12px 6px;"><div style="font-size:20px;font-weight:800;color:var(--danger);">${atrasadas}</div><p class="muted-text" style="margin:0;">Atrasada(s)</p></div>
+        <div style="flex:1;min-width:240px;">
+          <p class="muted-text" style="margin:0 0 6px;">Produtividade semanal · tarefas concluídas por dia</p>
+          <div style="position:relative;height:120px;"><canvas id="weekly-chart"></canvas></div>
         </div>
       </div>
     </div>
@@ -484,20 +529,59 @@ function renderDashboard(cu){
   `;
   return `<div class="app-layout"><div class="container" style="margin:0;flex:1;min-width:0;max-width:none;">${main}</div><div class="sidebar-panel" style="display:block;position:static;">${side}</div></div>`;
 }
+let weeklyChartInstance = null;
+function renderWeeklyChart(cu){
+  const canvas = document.getElementById("weekly-chart");
+  if(!canvas || typeof Chart === "undefined") return;
+  const tasks = tasksFor(cu.id).filter(t => t.status === "concluida" && t.concluido_em);
+  const labels = [], counts = [];
+  for(let i=6;i>=0;i--){
+    const d = new Date(); d.setDate(d.getDate()-i);
+    const key = d.toISOString().slice(0,10);
+    labels.push(d.toLocaleDateString("pt-BR",{ weekday:"short" }).replace(".",""));
+    counts.push(tasks.filter(t => t.concluido_em.slice(0,10) === key).length);
+  }
+  if(weeklyChartInstance){ weeklyChartInstance.destroy(); weeklyChartInstance = null; }
+  weeklyChartInstance = new Chart(canvas, {
+    type: "line",
+    data: { labels, datasets: [{ data: counts, borderColor:"#1c8a4b", backgroundColor:"rgba(28,138,75,.12)", fill:true, tension:.35, pointRadius:3, pointBackgroundColor:"#1c8a4b" }] },
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } },
+      scales:{ x:{ grid:{ display:false }, ticks:{ color:"#8a9691", font:{ size:10 } } },
+               y:{ beginAtZero:true, ticks:{ stepSize:1, color:"#8a9691", font:{ size:10 } }, grid:{ color:"#e1e6e2" } } } }
+  });
+}
 
-function renderMenu(){
-  return `
-  <div class="brand-stripe"></div>
-  <div class="container" style="max-width:380px;padding-top:70px;text-align:center;">
-    <div class="avatar" style="width:56px;height:56px;font-size:26px;margin:0 auto 16px;border-radius:16px;background:linear-gradient(135deg,var(--brand-green),var(--brand-blue));color:#fff;">&#9881;</div>
-    <h1 style="margin-bottom:4px;">Gestão de tarefas</h1>
-    <p class="muted-text" style="margin-bottom:24px;">Consulte a estrutura da empresa sem login, ou entre para gerenciar suas tarefas.</p>
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <button onclick="openOrgFromMenu()">Consultar organograma</button>
-      <button class="primary" onclick="STATE.authMode='login';go('login')">Entrar</button>
-      <button class="ghost small" onclick="STATE.authMode='signup';go('login')">Criar conta</button>
+function renderAuthHero(){
+  const totalPessoas = DB.usuarios.filter(u=>u.ativo!==false).length;
+  const totalEquipes = DB.equipes.length;
+  return `<div class="auth-hero"><div class="auth-hero-inner">
+    <div class="row" style="gap:12px;margin-bottom:22px;">
+      <div class="avatar" style="width:52px;height:52px;font-size:24px;border-radius:14px;background:linear-gradient(135deg,var(--brand-green),var(--brand-blue));color:#fff;">&#9881;</div>
+      <span style="font-size:23px;font-weight:800;letter-spacing:-.02em;">GESTÃO DE TAREFAS</span>
     </div>
-  </div>`;
+    <p style="font-size:16px;color:#cfe0ee;margin:0 0 20px;">Engenharia, organização e <span style="color:var(--brand-gold);font-weight:700;">performance</span> em um só lugar.</p>
+    <div>
+      <span class="auth-badge">&#128200; Produtividade</span>
+      <span class="auth-badge">&#127919; Controle</span>
+      <span class="auth-badge">&#127942; Resultados</span>
+    </div>
+    <div class="auth-stats">
+      <div class="auth-stat-card"><div style="font-size:22px;font-weight:800;">${totalPessoas}</div><p style="margin:0;font-size:12px;color:#a9c1d6;">colaborador(es) cadastrado(s)</p></div>
+      <div class="auth-stat-card"><div style="font-size:22px;font-weight:800;">${totalEquipes}</div><p style="margin:0;font-size:12px;color:#a9c1d6;">equipe(s) ativa(s)</p></div>
+    </div>
+  </div></div>`;
+}
+function renderAuthShell(){
+  const inner = STATE.authMode === "signup" ? renderSignupForm() : renderLoginForm();
+  return `${renderAuthHero()}<div class="auth-panel-wrap"><div class="auth-card">${inner}</div></div>`;
+}
+function togglePasswordVisibility(inputId, btn){
+  const input = document.getElementById(inputId);
+  input.type = input.type === "password" ? "text" : "password";
+  btn.style.opacity = input.type === "text" ? "1" : "";
+}
+function renderMenu(){
+  return renderAuthShell();
 }
 async function openOrgFromMenu(){ await loadPublicOrg(); go("org"); }
 
@@ -922,25 +1006,28 @@ function renderEquipesContent(){
 
 // ---------- Login / Signup ----------
 function renderLogin(){
-  if(STATE.authMode === "signup") return renderSignup();
-  return `<div class="container" style="max-width:360px;padding-top:80px;">
-    <button class="ghost small" onclick="go('menu')" style="margin-bottom:16px;">&larr; Voltar</button>
-    <h1 style="margin-bottom:6px;">Entrar</h1>
-    <p class="muted-text" style="margin-bottom:18px;">Use o e-mail e senha da sua conta.</p>
-    <label class="field-label">E-mail</label>
-    <input id="login-email" type="email" style="margin-bottom:10px;" />
-    <label class="field-label">Senha</label>
-    <input id="login-senha" type="password" style="margin-bottom:16px;" />
-    <button class="primary" style="width:100%;margin-bottom:10px;" onclick="doLogin()" ${STATE.busy?'disabled':''}>${STATE.busy?'Entrando…':'Entrar'}</button>
-    <p style="text-align:center;"><button class="link-btn" onclick="STATE.authMode='signup';render()">Ainda não tenho conta</button></p>
-  </div>`;
+  return renderAuthShell();
 }
-function renderSignup(){
+function renderLoginForm(){
+  return `
+    <div class="avatar" style="width:48px;height:48px;font-size:22px;border-radius:14px;background:linear-gradient(135deg,var(--brand-green),var(--brand-blue));color:#fff;margin:0 auto 14px;">&#9881;</div>
+    <h1 style="text-align:center;margin-bottom:4px;">Acesse sua conta</h1>
+    <p class="muted-text" style="text-align:center;margin-bottom:22px;">Gerencie equipes, prazos e resultados com clareza.</p>
+    <label class="field-label">E-mail</label>
+    <div class="input-icon-wrap"><span class="icon-left">&#9993;</span><input id="login-email" type="email" placeholder="seu@email.com" /></div>
+    <label class="field-label">Senha</label>
+    <div class="input-icon-wrap"><span class="icon-left">&#128274;</span><input id="login-senha" type="password" placeholder="Sua senha" /><button type="button" class="icon-right" onclick="togglePasswordVisibility('login-senha', this)" aria-label="Mostrar senha">&#128065;</button></div>
+    <button class="btn-cta" style="margin:8px 0 14px;" onclick="doLogin()" ${STATE.busy?'disabled':''}>${STATE.busy?'Entrando…':'Entrar &#8594;'}</button>
+    <div class="auth-divider">ou</div>
+    <button style="width:100%;margin-bottom:14px;" onclick="openOrgFromMenu()"><span style="margin-right:6px;">&#9776;</span>Consultar organograma</button>
+    <p style="text-align:center;font-size:13px;">Ainda não tem acesso? <button class="link-btn" onclick="STATE.authMode='signup';render()">Criar conta</button></p>
+  `;
+}
+function renderSignupForm(){
   const lideres = DB.usuarios.filter(u => u.ativo !== false);
-  return `<div class="container" style="max-width:360px;padding-top:60px;">
-    <button class="ghost small" onclick="STATE.authMode='login';render()" style="margin-bottom:16px;">&larr; Voltar</button>
-    <h1 style="margin-bottom:6px;">Criar conta</h1>
-    <p class="muted-text" style="margin-bottom:18px;">Escolha quem é seu líder direto na hierarquia.</p>
+  return `
+    <h1 style="text-align:center;margin-bottom:4px;">Criar conta</h1>
+    <p class="muted-text" style="text-align:center;margin-bottom:18px;">Escolha quem é seu líder direto na hierarquia.</p>
     <label class="field-label">Nome completo</label>
     <input id="su-nome" style="margin-bottom:10px;" />
     <label class="field-label">Cargo</label>
@@ -965,12 +1052,12 @@ function renderSignup(){
       ${lideres.map(l=>`<option value="${l.id}">${esc(l.nome)} — ${esc(l.cargo)}</option>`).join("")}
     </select>
     <label class="field-label">E-mail</label>
-    <input id="su-email" type="email" style="margin-bottom:10px;" />
+    <div class="input-icon-wrap"><span class="icon-left">&#9993;</span><input id="su-email" type="email" /></div>
     <label class="field-label">Senha</label>
-    <input id="su-senha" type="password" style="margin-bottom:16px;" />
-    <button class="primary" style="width:100%;margin-bottom:10px;" onclick="doSignup()" ${STATE.busy?'disabled':''}>${STATE.busy?'Criando…':'Criar conta'}</button>
-    <p style="text-align:center;"><button class="link-btn" onclick="STATE.authMode='login';render()">Já tenho conta</button></p>
-  </div>`;
+    <div class="input-icon-wrap"><span class="icon-left">&#128274;</span><input id="su-senha" type="password" /><button type="button" class="icon-right" onclick="togglePasswordVisibility('su-senha', this)" aria-label="Mostrar senha">&#128065;</button></div>
+    <button class="btn-cta" style="margin-top:4px;margin-bottom:10px;" onclick="doSignup()" ${STATE.busy?'disabled':''}>${STATE.busy?'Criando…':'Criar conta &#8594;'}</button>
+    <p style="text-align:center;font-size:13px;">Já tem conta? <button class="link-btn" onclick="STATE.authMode='login';render()">Entrar</button></p>
+  `;
 }
 async function doLogin(){
   const email = document.getElementById("login-email").value.trim();
@@ -1068,6 +1155,44 @@ function renderMain(){
 }
 
 function toggleNotif(){ STATE.notifOpen = !STATE.notifOpen; render(); }
+function toggleGlobalSearch(){
+  STATE.searchOpen = !STATE.searchOpen;
+  render();
+  if(STATE.searchOpen){ setTimeout(() => { const el = document.getElementById("global-search-input"); if(el) el.focus(); }, 30); }
+}
+function buildSearchResultsHtml(q){
+  if(q.length < 2) return `<p class="empty-hint">Digite ao menos 2 letras pra buscar.</p>`;
+  const tarefasResult = DB.tarefas.filter(t => t.titulo.toLowerCase().includes(q)).slice(0,8);
+  const pessoasResult = DB.usuarios.filter(u => u.ativo !== false && (u.nome.toLowerCase().includes(q) || (u.cargo||"").toLowerCase().includes(q))).slice(0,8);
+  let html = "";
+  if(tarefasResult.length){
+    html += `<p class="field-label">Tarefas</p>` + tarefasResult.map(t => `<div class="task-card" style="--strip:${farolStripColor(t)};margin-bottom:6px;" onclick="toggleGlobalSearch();openTask('${t.id}')">
+      <p style="font-size:13px;font-weight:700;margin:0 0 4px;">${esc(t.titulo)}</p>${badgeHtml(t)}
+    </div>`).join("");
+  }
+  if(pessoasResult.length){
+    html += `<p class="field-label" style="margin-top:10px;">Pessoas</p>` + pessoasResult.map(u => `<div class="row" style="gap:8px;padding:8px 4px;border-top:1px solid var(--border);">${avatarHtml(u,26)}<div><div style="font-size:13px;font-weight:700;">${esc(u.nome)}</div><div class="muted-text">${esc(u.cargo)}</div></div></div>`).join("");
+  }
+  if(!tarefasResult.length && !pessoasResult.length) html = `<p class="empty-hint">Nada encontrado.</p>`;
+  return html;
+}
+function updateSearchResults(){
+  const input = document.getElementById("global-search-input");
+  const container = document.getElementById("search-results-container");
+  if(!input || !container) return;
+  container.innerHTML = buildSearchResultsHtml(input.value.trim().toLowerCase());
+}
+function renderGlobalSearchOverlay(){
+  return `<div class="modal-overlay" onclick="if(event.target===this) toggleGlobalSearch()">
+    <div class="modal" style="max-width:480px;">
+      <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+        <h2>Buscar</h2><button class="ghost small" onclick="toggleGlobalSearch()" aria-label="Fechar">&#10005;</button>
+      </div>
+      <input id="global-search-input" placeholder="Buscar tarefas, pessoas..." oninput="updateSearchResults()" style="margin-bottom:14px;" />
+      <div id="search-results-container" style="max-height:50vh;overflow-y:auto;">${buildSearchResultsHtml("")}</div>
+    </div>
+  </div>`;
+}
 
 // ---------- Perfil ----------
 function renderPerfilContent(){
@@ -1826,7 +1951,8 @@ function farolStripColor(t){
 function prioridadeIcon(p){ return { Alta:"&#128293;", Média:"&#9889;", Baixa:"&#127793;" }[p] || ""; }
 function taskCardHtml(t, showAssignee){
   const assignee = getUser(t.atribuido_a);
-  return `<div class="task-card" style="--strip:${farolStripColor(t)};" onclick="openTask('${t.id}')">
+  const canDrag = t.atribuido_a === STATE.currentUserId && ["a_fazer","em_andamento","concluida"].includes(t.status);
+  return `<div class="task-card" style="--strip:${farolStripColor(t)};" ${canDrag?`draggable="true" ondragstart="onDragStartTask(event,'${t.id}')" ondragend="onDragEndTask(event)"`:""} onclick="openTask('${t.id}')">
     <p style="font-size:13.5px;font-weight:700;margin:0 0 7px;">${esc(t.titulo)}</p>
     <div class="row" style="justify-content:space-between;margin-bottom:7px;">
       <div class="row" style="gap:5px;">
@@ -1847,11 +1973,32 @@ const PRIORIDADE_STYLE = {
   Média: { icon:"&#9889;",  grad:"linear-gradient(135deg,#f0b400,#c68e00)" },
   Baixa: { icon:"&#127793;", grad:"linear-gradient(135deg,#1660ae,#0f4a86)" }
 };
-function kanbanColHtml(title, count, bodyHtml, style){
+let draggedTaskId = null;
+function onDragStartTask(event, taskId){
+  draggedTaskId = taskId;
+  event.dataTransfer.effectAllowed = "move";
+  try{ event.dataTransfer.setData("text/plain", taskId); }catch(e){}
+}
+function onDragEndTask(event){ draggedTaskId = null; }
+async function onDropTask(event, newStatus){
+  event.preventDefault();
+  event.currentTarget.classList.remove("kanban-col-dragover");
+  const taskId = draggedTaskId || (event.dataTransfer && event.dataTransfer.getData("text/plain"));
+  draggedTaskId = null;
+  if(!taskId) return;
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t || t.status === newStatus || t.atribuido_a !== STATE.currentUserId) return;
+  await mutate(sb.from("tarefas").update({ status: newStatus }).eq("id", taskId));
+  render();
+}
+function kanbanColHtml(title, count, bodyHtml, style, dropStatus){
   const headerBg = style ? `background:${style.grad};` : "";
   const titleColor = style ? "color:#fff;" : "";
   const countStyle = style ? "background:rgba(255,255,255,.28);color:#fff;" : "";
-  return `<div class="kanban-col">
+  const dropAttrs = dropStatus
+    ? `ondragover="event.preventDefault();this.classList.add('kanban-col-dragover');" ondragleave="this.classList.remove('kanban-col-dragover');" ondrop="onDropTask(event,'${dropStatus}')"`
+    : "";
+  return `<div class="kanban-col" ${dropAttrs}>
     <div class="kanban-col-header" style="${headerBg}border-radius:9px;padding:8px 10px;margin-bottom:2px;">
       <span class="kanban-col-title" style="${titleColor}">${style?style.icon+" ":""}${title}</span>
       <span class="kanban-col-count" style="${countStyle}">${count}</span>
@@ -1865,7 +2012,7 @@ function renderTaskViews(tasks){
     const cols = { a_fazer: [], em_andamento: [], concluida: [] };
     tasks.forEach(t => { if(cols[t.status]) cols[t.status].push(t); });
     return `<div class="grid3">${["a_fazer","em_andamento","concluida"].map(s =>
-      kanbanColHtml(statusLabel(s), (cols[s]||[]).length, (cols[s]||[]).map(t=>taskCardHtml(t, true)).join(""), STATUS_STYLE[s])
+      kanbanColHtml(statusLabel(s), (cols[s]||[]).length, (cols[s]||[]).map(t=>taskCardHtml(t, true)).join(""), STATUS_STYLE[s], s)
     ).join("")}</div>`;
   }
   if(STATE.view === "lista"){
