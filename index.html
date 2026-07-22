@@ -573,7 +573,7 @@ function renderAuthHero(){
 }
 function renderAuthShell(){
   const inner = STATE.authMode === "signup" ? renderSignupForm() : renderLoginForm();
-  return `${renderAuthHero()}<div class="auth-panel-wrap"><div class="auth-card">${inner}</div></div>`;
+  return `<div class="auth-shell">${renderAuthHero()}<div class="auth-panel-wrap"><div class="auth-card">${inner}</div></div></div>`;
 }
 function togglePasswordVisibility(inputId, btn){
   const input = document.getElementById(inputId);
