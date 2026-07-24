@@ -228,6 +228,9 @@ let STATE = {
   reprogramacaoRecusarOpen: null,
   chatEquipeAtiva: null,
   searchOpen: false,
+  offlineMode: false,
+  agendaMes: null,
+  agendaDiaSelecionado: null,
   navOpen: false,
   busy: false,
   submitting: false
@@ -253,10 +256,24 @@ function toast(msg){
   setTimeout(()=>el.remove(), 4500);
 }
 async function mutate(promise){
+  if(STATE.offlineMode){ toast("Você está offline — essa ação exige conexão com a internet."); return false; }
   const { error } = await promise;
   if(error){ toast("Erro: " + error.message); return false; }
   await loadAll();
   return true;
+}
+function cacheDataLocally(){
+  try{
+    localStorage.setItem("gt_cache_data", JSON.stringify(DB));
+    localStorage.setItem("gt_cache_time", new Date().toISOString());
+  }catch(e){}
+}
+function loadCachedData(){
+  try{
+    const raw = localStorage.getItem("gt_cache_data");
+    if(raw){ DB = JSON.parse(raw); return true; }
+  }catch(e){}
+  return false;
 }
 
 // ---------- DATA LOADING ----------
@@ -308,6 +325,7 @@ async function loadAll(){
   DB.reprogramacoes = rep.data || [];
   DB.mensagens = msg.data || [];
   rankingCache = {};
+  cacheDataLocally();
 }
 
 function getUser(id){ return DB.usuarios.find(u => u.id === id); }
@@ -409,6 +427,8 @@ function render(){
   else if(STATE.screen === "equipes") app.innerHTML = cu ? renderShell(cu, "equipes", "Equipes", renderEquipesContent()) : renderMenu();
   else if(STATE.screen === "mapa") app.innerHTML = cu ? renderShell(cu, "mapa", "Mapa da Equipe", renderMapaEquipeContent(cu)) : renderMenu();
   else if(STATE.screen === "escala") app.innerHTML = cu ? renderShell(cu, "escala", "Minha Escala", renderEscalaContent(cu)) : renderMenu();
+  else if(STATE.screen === "agenda") app.innerHTML = cu ? renderShell(cu, "agenda", "Agenda", renderAgendaContent(cu)) : renderMenu();
+  else if(STATE.screen === "brainstorm") app.innerHTML = cu ? renderShell(cu, "brainstorm", "Brainstorm", renderBrainstormContent(cu)) : renderMenu();
   else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
   if(STATE.openTaskId){ document.body.insertAdjacentHTML("beforeend", renderTaskModal()); }
@@ -426,6 +446,8 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"dashboard", label:"Dashboard", icon:"&#127968;" },
     { key:"minhas", label:"Minhas tarefas", icon:"&#128203;" },
     { key:"escala", label:"Minha Escala", icon:"&#128197;" },
+    { key:"agenda", label:"Agenda", icon:"&#128198;" },
+    { key:"brainstorm", label:"Brainstorm", icon:"&#128161;" },
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
     ...(hasTeam ? [{ key:"mapa", label:"Mapa da Equipe", icon:"&#128506;" }] : []),
     ...(getEquipesRelevantes(cu).length ? [{ key:"chat", label:"Chat da Equipe", icon:"&#128172;" }] : []),
@@ -463,6 +485,7 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
         </div>
       </div>
       ${STATE.notifOpen ? renderNotifDrop(notifs) : ""}
+      ${STATE.offlineMode ? `<div style="background:var(--warn-bg);color:var(--warn-text);text-align:center;padding:6px;font-size:12px;font-weight:700;">&#9888; Modo offline — mostrando os últimos dados salvos. Algumas ações exigem internet.</div>` : ""}
       <div class="container" style="margin:0;max-width:none;">${contentHtml}</div>
     </div>
   </div>`;
@@ -477,6 +500,8 @@ function goSection(key){
   else if(key === "equipes") go("equipes");
   else if(key === "mapa") go("mapa");
   else if(key === "escala") go("escala");
+  else if(key === "agenda") go("agenda");
+  else if(key === "brainstorm") go("brainstorm");
   else if(key === "chat") go("chat");
   else if(key === "perfil") go("perfil");
 }
@@ -767,6 +792,88 @@ async function sendMensagemEquipe(equipeId){
   await mutate(sb.from("mensagens_equipe").insert({ equipe_id: equipeId, usuario_id: STATE.currentUserId, texto }));
   render();
   setTimeout(() => { const box = document.getElementById("chat-scroll"); if(box) box.scrollTop = box.scrollHeight; }, 0);
+}
+const NOMES_MES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+function mudarMesAgenda(delta){
+  const [ano, mes] = STATE.agendaMes.split("-").map(Number);
+  const d = new Date(ano, mes - 1 + delta, 1);
+  STATE.agendaMes = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+  STATE.agendaDiaSelecionado = null;
+  render();
+}
+function renderAgendaContent(cu){
+  if(!STATE.agendaMes) STATE.agendaMes = todayISO().slice(0,7);
+  const [ano, mes] = STATE.agendaMes.split("-").map(Number);
+  const primeiroDiaSemana = new Date(ano, mes-1, 1).getDay();
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+
+  const eventosPorDia = {};
+  const addEvento = (dataStr, tipo, texto) => {
+    if(!dataStr) return;
+    (eventosPorDia[dataStr] = eventosPorDia[dataStr] || []).push({ tipo, texto });
+  };
+  tasksFor(cu.id).forEach(t => {
+    if(!["concluida","cancelada","recusada","pendente_aprovacao"].includes(t.status)) addEvento(t.prazo, "tarefa", t.titulo);
+  });
+  DB.ferias.filter(f => f.usuario_id === cu.id).forEach(f => addEvento(f.data_inicio, "ferias", "Início de férias"));
+  DB.escalas.filter(e => e.usuario_id === cu.id).forEach(e => addEvento(e.data_inicio, "escala", `${e.turno} · ${e.frente}`));
+
+  const iconePorTipo = { tarefa:"&#128203;", ferias:"&#127796;", escala:"&#128197;" };
+  const corPorTipo = { tarefa:"var(--danger)", ferias:"var(--ok)", escala:"var(--info)" };
+
+  let grid = `<div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:14px;">
+      <button class="small ghost" onclick="mudarMesAgenda(-1)" aria-label="Mês anterior">&#8592;</button>
+      <span style="font-weight:800;">${NOMES_MES[mes-1]} de ${ano}</span>
+      <button class="small ghost" onclick="mudarMesAgenda(1)" aria-label="Próximo mês">&#8594;</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center;">
+      ${["D","S","T","Q","Q","S","S"].map(d=>`<div class="muted-text" style="font-size:11px;font-weight:800;padding:4px 0;">${d}</div>`).join("")}
+      ${Array(primeiroDiaSemana).fill("<div></div>").join("")}
+      ${Array.from({ length: diasNoMes }, (_, i) => {
+        const dia = i+1;
+        const dataStr = `${ano}-${String(mes).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+        const eventos = eventosPorDia[dataStr] || [];
+        const hoje = dataStr === todayISO();
+        const selecionado = STATE.agendaDiaSelecionado === dataStr;
+        return `<div onclick="STATE.agendaDiaSelecionado='${dataStr}';render()" style="cursor:pointer;padding:8px 2px;border-radius:8px;${selecionado?'background:var(--accent-bg);':''}${hoje&&!selecionado?'box-shadow:inset 0 0 0 2px var(--brand-blue);':''}">
+          <div style="font-size:13px;font-weight:${hoje?'800':'600'};">${dia}</div>
+          <div style="display:flex;justify-content:center;gap:2px;margin-top:3px;height:6px;">${eventos.slice(0,3).map(e=>`<span style="width:5px;height:5px;border-radius:50%;background:${corPorTipo[e.tipo]};"></span>`).join("")}</div>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
+
+  if(STATE.agendaDiaSelecionado){
+    const eventos = eventosPorDia[STATE.agendaDiaSelecionado] || [];
+    grid += `<div class="card" style="margin-top:14px;">
+      <h3 style="margin-bottom:10px;">${fmtDate(STATE.agendaDiaSelecionado)}</h3>
+      ${eventos.length ? eventos.map(e => `<p style="font-size:13px;margin:0 0 8px;">${iconePorTipo[e.tipo]} ${esc(e.texto)}</p>`).join("") : `<p class="empty-hint">Nada agendado nesse dia.</p>`}
+    </div>`;
+  }
+
+  return `<h1 style="margin-bottom:4px;">Agenda</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Prazos de tarefas, férias e escalas num só calendário. &#128203; tarefa · &#127796; férias · &#128197; escala.</p>
+  ${grid}`;
+}
+function renderBrainstormContent(cu){
+  let texto = "";
+  try{ texto = localStorage.getItem("gt_brainstorm_"+cu.id) || ""; }catch(e){}
+  return `<h1 style="margin-bottom:4px;">Brainstorm</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Espaço pessoal pra rascunhar ideias — funciona mesmo sem internet, salvo só neste navegador.</p>
+  <div class="card">
+    <textarea id="brainstorm-text" rows="16" placeholder="Escreva suas ideias aqui..." oninput="salvarBrainstorm('${cu.id}')" style="resize:vertical;">${esc(texto)}</textarea>
+    <p class="muted-text" id="brainstorm-status" style="margin-top:8px;">Salvo automaticamente neste navegador.</p>
+  </div>`;
+}
+function salvarBrainstorm(userId){
+  const el = document.getElementById("brainstorm-text");
+  if(!el) return;
+  try{
+    localStorage.setItem("gt_brainstorm_"+userId, el.value);
+    const status = document.getElementById("brainstorm-status");
+    if(status) status.textContent = "Salvo · " + new Date().toLocaleTimeString("pt-BR", { hour:"2-digit", minute:"2-digit" });
+  }catch(e){}
 }
 function renderEscalaContent(cu){
   const atual = getAlocacaoAtual(cu.id);
@@ -1146,6 +1253,7 @@ async function afterLogin(session){
   if(!getUser(STATE.currentUserId)){
     toast("Seu perfil ainda está sendo criado, tente novamente em instantes.");
   }
+  try{ localStorage.setItem("gt_last_user_id", session.user.id); }catch(e){}
   STATE.tab = "minhas"; STATE.view = "kanban";
   setupRealtime();
   go("dashboard");
@@ -2360,9 +2468,23 @@ async function resolverImpedimento(taskId){
 // ---------- init ----------
 (async function init(){
   render();
-  const { data: { session } } = await sb.auth.getSession();
-  if(session){ await afterLogin(session); }
-  else{ await loadPublicOrg(); STATE.screen = "menu"; render(); }
+  try{
+    const { data: { session }, error } = await sb.auth.getSession();
+    if(error) throw error;
+    if(session){ await afterLogin(session); }
+    else{ await loadPublicOrg(); STATE.screen = "menu"; render(); }
+  }catch(err){
+    const cachedUserId = (() => { try{ return localStorage.getItem("gt_last_user_id"); }catch(e){ return null; } })();
+    if(cachedUserId && loadCachedData() && getUser(cachedUserId)){
+      STATE.currentUserId = cachedUserId;
+      STATE.offlineMode = true;
+      STATE.tab = "minhas"; STATE.view = "kanban";
+      go("dashboard");
+      toast("Sem conexão — mostrando os últimos dados salvos neste navegador.");
+    }else{
+      STATE.screen = "menu"; render();
+    }
+  }
 })();
 
 if("serviceWorker" in navigator){
