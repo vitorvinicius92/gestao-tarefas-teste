@@ -1804,6 +1804,9 @@ function getEquipesRelevantes(cu){
   getDirectReports(cu.id).forEach(r => { if(r.equipe_id) ids.add(r.equipe_id); });
   return [...ids];
 }
+function posicaoRanking(i){
+  return { 0:"&#129351;", 1:"&#129352;", 2:"&#129353;" }[i] || `<span class="mono">${i+1}º</span>`;
+}
 function renderRankingCardFor(cu, equipeId){
   ensureRanking(equipeId);
   const monthKey = new Date().toISOString().slice(0,7);
@@ -1817,7 +1820,7 @@ function renderRankingCardFor(cu, equipeId){
   return `<div class="card" style="margin-bottom:16px;">
     <p class="muted-text" style="margin-bottom:8px;">&#127942; Ranking · ${esc(nomeEquipe)} · ${esc(mesNome)}</p>
     ${ranked.map((r,i) => `<div class="row" style="justify-content:space-between;padding:5px 6px;border-radius:6px;${r.u.id===cu.id?'background:var(--accent-bg);':''}">
-      <div class="row" style="gap:8px;"><span class="mono" style="width:20px;">${i+1}º</span>${avatarHtml(r.u,24)}<span style="font-size:13px;font-weight:${r.u.id===cu.id?'800':'600'};">${esc(r.u.nome)}</span></div>
+      <div class="row" style="gap:8px;"><span style="width:22px;text-align:center;font-size:15px;">${posicaoRanking(i)}</span>${avatarHtml(r.u,24)}<span style="font-size:13px;font-weight:${r.u.id===cu.id?'800':'600'};">${esc(r.u.nome)}</span></div>
       <span class="badge accent">${r.pontos} pts</span>
     </div>`).join("")}
   </div>`;
