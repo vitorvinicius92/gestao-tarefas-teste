@@ -213,7 +213,7 @@ const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
 const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
-let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [] };
+let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [], mapasMentais: [] };
 let SESSION = null;
 let deviosChart = null;
 let STATE = {
@@ -243,6 +243,9 @@ let STATE = {
   agendaDiaSelecionado: null,
   brainstormTab: "notas",
   mindmapFocoId: null,
+  mindmapDonoId: null,
+  mindmapBusca: "",
+  mindmapCompartilharOpen: false,
   navOpen: false,
   busy: false,
   submitting: false
@@ -300,7 +303,7 @@ async function loadPublicOrg(){
   if(!es.error) DB.especialidades = es.data || [];
 }
 async function loadAll(){
-  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg] = await Promise.all([
+  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg,mm] = await Promise.all([
     sb.from("usuarios").select("*"),
     sb.from("tarefas").select("*"),
     sb.from("comentarios_tarefa").select("*"),
@@ -317,7 +320,8 @@ async function loadAll(){
     sb.from("escalas").select("*").order("data_inicio", { ascending:true }),
     sb.from("subtarefas").select("*"),
     sb.from("reprogramacoes").select("*"),
-    sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true })
+    sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true }),
+    sb.from("mapas_mentais").select("*")
   ]);
   DB.usuarios = u.data || [];
   DB.tarefas = t.data || [];
@@ -336,6 +340,7 @@ async function loadAll(){
   DB.subtarefas = sub.data || [];
   DB.reprogramacoes = rep.data || [];
   DB.mensagens = msg.data || [];
+  DB.mapasMentais = mm.data || [];
   rankingCache = {};
   cacheDataLocally();
 }
@@ -891,7 +896,7 @@ function salvarNotaAgenda(userId, dataStr){
 function renderBrainstormContent(cu){
   if(!STATE.brainstormTab) STATE.brainstormTab = "notas";
   return `<h1 style="margin-bottom:4px;">Brainstorm</h1>
-  <p class="muted-text" style="margin-bottom:16px;">Espaço pessoal pra ideias — funciona sem internet, salvo só neste navegador.</p>
+  <p class="muted-text" style="margin-bottom:16px;">Notas rápidas (só neste navegador) e um mapa mental salvo no banco, compartilhável com quem você autorizar.</p>
   <div class="tabs" style="margin-top:0;">
     <button class="small ${STATE.brainstormTab==='notas'?'active':''}" onclick="STATE.brainstormTab='notas';render()">Notas</button>
     <button class="small ${STATE.brainstormTab==='mapa'?'active':''}" onclick="STATE.brainstormTab='mapa';render()">Mapa Mental</button>
@@ -916,21 +921,19 @@ function salvarBrainstorm(userId){
   }catch(e){}
 }
 
-// ---------- Mapa mental ----------
-function mindmapKey(userId){ return "gt_mindmap_" + userId; }
-function loadMindmap(userId){
-  try{
-    const raw = localStorage.getItem(mindmapKey(userId));
-    if(raw) return JSON.parse(raw);
-  }catch(e){}
-  return { id:"root", texto:"Ideia central", filhos:[] };
-}
-function saveMindmap(userId, tree){
-  try{ localStorage.setItem(mindmapKey(userId), JSON.stringify(tree)); }catch(e){}
-}
+// ---------- Mapa mental (salvo no banco, compartilhável) ----------
+const MM_PALETTE = ["#e63946","#1660ae","#f0b400","#1c8a4b","#7c5cbf","#e07b39","#0f9b8e","#d63384"];
 function findMindmapNode(tree, id){
   if(tree.id === id) return tree;
   for(const filho of (tree.filhos||[])){ const found = findMindmapNode(filho, id); if(found) return found; }
+  return null;
+}
+function findMindmapParent(tree, id){
+  for(const filho of (tree.filhos||[])){
+    if(filho.id === id) return tree;
+    const found = findMindmapParent(filho, id);
+    if(found) return found;
+  }
   return null;
 }
 function removeMindmapNode(tree, id){
@@ -947,57 +950,173 @@ function findMindmapPath(tree, targetId, caminhoAtual){
   }
   return null;
 }
-function mindmapAddNode(userId, parentId){
+function searchMindmap(tree, termo, resultados){
+  resultados = resultados || [];
+  if(tree.texto.toLowerCase().includes(termo)) resultados.push(tree);
+  (tree.filhos||[]).forEach(f => searchMindmap(f, termo, resultados));
+  return resultados;
+}
+function getViewedMindmapRow(cu){
+  const donoId = STATE.mindmapDonoId || cu.id;
+  return DB.mapasMentais.find(m => m.dono_id === donoId) || null;
+}
+async function ensureMindmapRow(userId){
+  let row = DB.mapasMentais.find(m => m.dono_id === userId);
+  if(row) return row;
+  const { data, error } = await sb.from("mapas_mentais").insert({ dono_id: userId }).select().single();
+  if(error){ toast("Erro ao criar mapa mental: " + error.message); return null; }
+  DB.mapasMentais.push(data);
+  return data;
+}
+async function saveMindmapTree(rowId, tree){
+  await mutate(sb.from("mapas_mentais").update({ arvore: tree, atualizado_em: new Date().toISOString() }).eq("id", rowId));
+}
+async function mindmapAddNode(userId, parentId){
   const texto = prompt("Texto da nova ideia:");
   if(!texto || !texto.trim()) return;
-  const tree = loadMindmap(userId);
+  const row = await ensureMindmapRow(STATE.mindmapDonoId || userId);
+  if(!row) return;
+  const tree = row.arvore;
   const parent = findMindmapNode(tree, parentId);
   if(parent){
     parent.filhos = parent.filhos || [];
-    parent.filhos.push({ id: uid(), texto: texto.trim(), rotulo:"", filhos: [] });
-    saveMindmap(userId, tree);
+    parent.filhos.push({ id: uid(), texto: texto.trim(), rotulo:"", link:"", filhos: [] });
+    await saveMindmapTree(row.id, tree);
     render();
   }
 }
-function mindmapEditNode(userId, nodeId){
-  const tree = loadMindmap(userId);
+async function mindmapEditNode(userId, nodeId){
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const tree = row.arvore;
   const node = findMindmapNode(tree, nodeId);
   if(!node) return;
   const novo = prompt("Editar texto da ideia:", node.texto);
   if(novo === null || !novo.trim()) return;
   node.texto = novo.trim();
-  saveMindmap(userId, tree);
+  await saveMindmapTree(row.id, tree);
   render();
 }
-function mindmapEditRotulo(userId, nodeId){
-  const tree = loadMindmap(userId);
+async function mindmapEditRotulo(userId, nodeId){
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const tree = row.arvore;
   const node = findMindmapNode(tree, nodeId);
   if(!node) return;
   const novo = prompt("Rótulo dessa ligação:", node.rotulo || "");
   if(novo === null) return;
   node.rotulo = novo.trim();
-  saveMindmap(userId, tree);
+  await saveMindmapTree(row.id, tree);
   render();
 }
-function mindmapDeleteNode(userId, nodeId){
+async function mindmapEditLink(userId, nodeId){
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const tree = row.arvore;
+  const node = findMindmapNode(tree, nodeId);
+  if(!node) return;
+  const novo = prompt("Link (URL) associado a essa ideia:", node.link || "");
+  if(novo === null) return;
+  node.link = novo.trim();
+  await saveMindmapTree(row.id, tree);
+  render();
+}
+async function mindmapDeleteNode(userId, nodeId){
   if(nodeId === "root") return;
   if(!confirm("Remover essa ideia e tudo que estiver ligado a ela?")) return;
-  const tree = loadMindmap(userId);
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const tree = row.arvore;
   removeMindmapNode(tree, nodeId);
-  saveMindmap(userId, tree);
+  await saveMindmapTree(row.id, tree);
   if(!findMindmapNode(tree, STATE.mindmapFocoId)) STATE.mindmapFocoId = "root";
   render();
 }
-function mindmapFocar(nodeId){ STATE.mindmapFocoId = nodeId; render(); }
-const MM_PALETTE = ["#e63946","#1660ae","#f0b400","#1c8a4b","#7c5cbf","#e07b39","#0f9b8e","#d63384"];
+async function mindmapMoveNode(userId, nodeId, direcao){
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const tree = row.arvore;
+  const pai = findMindmapParent(tree, nodeId);
+  if(!pai) return;
+  const idx = pai.filhos.findIndex(f => f.id === nodeId);
+  const novoIdx = idx + direcao;
+  if(novoIdx < 0 || novoIdx >= pai.filhos.length) return;
+  [pai.filhos[idx], pai.filhos[novoIdx]] = [pai.filhos[novoIdx], pai.filhos[idx]];
+  await saveMindmapTree(row.id, tree);
+  render();
+}
+async function mindmapVirarTarefa(userId, nodeId){
+  const row = getViewedMindmapRow(currentUser());
+  if(!row) return;
+  const node = findMindmapNode(row.arvore, nodeId);
+  if(!node) return;
+  const cu = currentUser();
+  const tema = DB.temas[0];
+  if(!tema){ toast("Cadastre um tema antes de transformar em tarefa."); return; }
+  const prazo = new Date(); prazo.setDate(prazo.getDate()+7);
+  const ok = await mutate(sb.from("tarefas").insert({
+    titulo: node.texto, tema_id: tema.id, prioridade:"Média", prazo: prazo.toISOString().slice(0,10),
+    status:"a_fazer", origem:"liderado", criado_por: cu.id, atribuido_a: cu.id
+  }));
+  if(ok) toast(`Tarefa "${node.texto}" criada — ajuste tema e prazo em "Minhas tarefas".`);
+}
+function mindmapFocar(nodeId){ STATE.mindmapFocoId = nodeId; STATE.mindmapBusca = ""; render(); }
+function updateMindmapSearch(){
+  const input = document.getElementById("mindmap-busca-input");
+  const container = document.getElementById("mindmap-search-results");
+  if(!input || !container) return;
+  STATE.mindmapBusca = input.value;
+  const termo = input.value.trim().toLowerCase();
+  if(termo.length < 2){ container.innerHTML = ""; return; }
+  const cu = currentUser();
+  const row = getViewedMindmapRow(cu);
+  if(!row){ container.innerHTML = ""; return; }
+  const foco = findMindmapNode(row.arvore, STATE.mindmapFocoId) || row.arvore;
+  const achados = searchMindmap(row.arvore, termo).filter(n2 => n2.id !== foco.id);
+  container.innerHTML = achados.length
+    ? `<div class="card" style="margin-bottom:12px;"><p class="field-label">Resultados</p>${achados.map(n2 => `<button class="small ghost" style="margin:0 6px 6px 0;" onclick="mindmapFocar('${n2.id}')">${esc(n2.texto)}</button>`).join("")}</div>`
+    : `<div class="card" style="margin-bottom:12px;"><p class="empty-hint">Nada encontrado.</p></div>`;
+}
+async function mindmapCompartilhar(userId, alvoId){
+  const row = await ensureMindmapRow(userId);
+  if(!row) return;
+  const lista = new Set(row.compartilhado_com || []);
+  if(lista.has(alvoId)) lista.delete(alvoId); else lista.add(alvoId);
+  await mutate(sb.from("mapas_mentais").update({ compartilhado_com: [...lista] }).eq("id", row.id));
+  render();
+}
 function renderMindmapContent(cu){
-  const tree = loadMindmap(cu.id);
+  if(!STATE.mindmapDonoId) STATE.mindmapDonoId = cu.id;
+  let row = getViewedMindmapRow(cu);
+  if(!row){
+    return `<div class="card"><p class="empty-hint" style="margin-bottom:10px;">Você ainda não tem um mapa mental — crie o primeiro.</p>
+      <button class="primary" onclick="ensureMindmapRow('${cu.id}').then(render)"><span style="margin-right:4px;">+</span>Criar meu mapa mental</button>
+    </div>`;
+  }
+  const tree = row.arvore;
+  const souDono = row.dono_id === cu.id;
   if(!STATE.mindmapFocoId) STATE.mindmapFocoId = "root";
   let foco = findMindmapNode(tree, STATE.mindmapFocoId);
   if(!foco){ STATE.mindmapFocoId = "root"; foco = tree; }
   const filhos = foco.filhos || [];
   const n = filhos.length;
   const caminho = findMindmapPath(tree, foco.id) || [tree];
+
+  // seletor de mapas visíveis (o meu + os compartilhados comigo)
+  const mapasVisiveis = DB.mapasMentais.filter(m => m.dono_id === cu.id || (m.compartilhado_com||[]).includes(cu.id));
+  const seletor = mapasVisiveis.length > 1 ? `<select style="width:auto;margin-bottom:12px;" onchange="STATE.mindmapDonoId=this.value;STATE.mindmapFocoId='root';render()">
+    ${mapasVisiveis.map(m => `<option value="${m.dono_id}" ${STATE.mindmapDonoId===m.dono_id?'selected':''}>${m.dono_id===cu.id?'Meu mapa':'Mapa de '+esc(getUser(m.dono_id)?.nome||'?')}</option>`).join("")}
+  </select>` : "";
+
+  // busca
+  let buscaHtml = "";
+  if(STATE.mindmapBusca && STATE.mindmapBusca.trim().length >= 2){
+    const achados = searchMindmap(tree, STATE.mindmapBusca.trim().toLowerCase()).filter(n2 => n2.id !== foco.id);
+    buscaHtml = `<div class="card" style="margin-bottom:12px;">
+      <p class="field-label">Resultados</p>
+      ${achados.length ? achados.map(n2 => `<button class="small ghost" style="margin:0 6px 6px 0;" onclick="mindmapFocar('${n2.id}')">${esc(n2.texto)}</button>`).join("") : `<p class="empty-hint">Nada encontrado.</p>`}
+    </div>`;
+  }
 
   let svgLinks = "";
   let nodesHtml = `<div class="mm-node mm-center" style="left:50%;top:50%;" onclick="mindmapEditNode('${cu.id}','${foco.id}')">${esc(foco.texto)}</div>`;
@@ -1019,9 +1138,16 @@ function renderMindmapContent(cu){
 
     nodesHtml += `<div class="mm-node" style="left:${x}%;top:${y}%;background:${cor};" onclick="mindmapFocar('${filho.id}')">
       <span onclick="event.stopPropagation();mindmapEditNode('${cu.id}','${filho.id}')">${esc(filho.texto)}${filho.filhos && filho.filhos.length ? ` (${filho.filhos.length})` : ""}</span>
+      ${filho.link ? `<div onclick="event.stopPropagation();window.open('${esc(filho.link)}','_blank')" style="font-size:11px;margin-top:2px;">&#128279;</div>` : ""}
       <div class="mm-node-actions" onclick="event.stopPropagation();">
+        <button onclick="mindmapMoveNode('${cu.id}','${filho.id}',-1)" aria-label="Mover pra esquerda">&#9664;</button>
         <button onclick="mindmapAddNode('${cu.id}','${filho.id}')" aria-label="Adicionar ideia ligada">+</button>
         <button onclick="mindmapDeleteNode('${cu.id}','${filho.id}')" aria-label="Remover">&minus;</button>
+        <button onclick="mindmapMoveNode('${cu.id}','${filho.id}',1)" aria-label="Mover pra direita">&#9654;</button>
+      </div>
+      <div class="row" style="justify-content:center;gap:4px;margin-top:3px;" onclick="event.stopPropagation();">
+        <button class="small ghost" style="font-size:10px;padding:2px 6px;" onclick="mindmapEditLink('${cu.id}','${filho.id}')">&#128279; link</button>
+        <button class="small ghost" style="font-size:10px;padding:2px 6px;" onclick="mindmapVirarTarefa('${cu.id}','${filho.id}')">&#10132; tarefa</button>
       </div>
     </div>`;
     nodesHtml += `<div class="mm-label" style="left:${ctrlX}%;top:${ctrlY}%;" onclick="mindmapEditRotulo('${cu.id}','${filho.id}')">${esc(filho.rotulo || ("Ideia_"+(i+1)))}</div>`;
@@ -1029,10 +1155,23 @@ function renderMindmapContent(cu){
 
   const breadcrumb = caminho.map((n2,i) => `<button class="link-btn" onclick="mindmapFocar('${n2.id}')" style="${i===caminho.length-1?'font-weight:800;text-decoration:none;':''}">${esc(n2.texto)}</button>`).join(` <span class="muted-text">&#8250;</span> `);
 
-  return `<div class="row" style="flex-wrap:wrap;margin-bottom:10px;">${breadcrumb}</div>
+  return `${seletor}
+  <div class="row" style="flex-wrap:wrap;margin-bottom:10px;">${breadcrumb}</div>
+  <div class="row" style="gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+    <input id="mindmap-busca-input" placeholder="Buscar no mapa..." value="${esc(STATE.mindmapBusca||'')}" oninput="updateMindmapSearch()" style="max-width:240px;" />
+    ${souDono ? `<button class="small ghost" onclick="STATE.mindmapCompartilharOpen=!STATE.mindmapCompartilharOpen;render()">&#128101; Compartilhar</button>` : `<span class="badge accent">Mapa compartilhado com você</span>`}
+  </div>
+  ${STATE.mindmapCompartilharOpen && souDono ? `<div class="card" style="margin-bottom:12px;">
+    <p class="field-label">Quem pode ver e editar esse mapa</p>
+    ${DB.usuarios.filter(u=>u.id!==cu.id && u.ativo!==false).map(u => `<label class="row" style="gap:8px;padding:4px 0;cursor:pointer;">
+      <input type="checkbox" style="width:auto;" ${(row.compartilhado_com||[]).includes(u.id)?'checked':''} onchange="mindmapCompartilhar('${cu.id}','${u.id}')" />
+      <span style="font-size:13px;">${esc(u.nome)}</span>
+    </label>`).join("")}
+  </div>` : ""}
+  <div id="mindmap-search-results">${buscaHtml}</div>
   <div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-      <p class="muted-text" style="margin:0;">Clique numa bolha pra entrar nela · clique no rótulo pra renomear a ligação.</p>
+      <p class="muted-text" style="margin:0;">Clique numa bolha pra entrar · rótulo pra renomear a ligação · &#9664;&#9654; pra reordenar.</p>
       <button class="small" onclick="mindmapAddNode('${cu.id}','${foco.id}')"><span style="margin-right:4px;">+</span>Nova ideia aqui</button>
     </div>
     <div class="mm-canvas">
@@ -1706,11 +1845,11 @@ function renderMinhasTarefas(cu){
       </div>`; }).join("")}
     </div>` : ""}
     <div class="ranking-inline">${renderRankingCard(cu)}</div>
-    ${renderViewSwitcher()}
-    ${renderTaskViews(tasks, true)}
-    <div style="margin-top:20px;">
+    <div style="margin-bottom:16px;">
       ${STATE.showProposeForm ? renderProposeForm(cu) : `<button onclick="STATE.showProposeForm=true;render()"><span style="margin-right:4px;">+</span>Nova tarefa</button>`}
-    </div>`;
+    </div>
+    ${renderViewSwitcher()}
+    ${renderTaskViews(tasks, true)}`;
 }
 function renderProposeForm(cu){
   return `<div class="card">
