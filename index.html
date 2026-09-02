@@ -270,18 +270,22 @@ function toast(msg){
   document.body.appendChild(el);
   setTimeout(()=>el.remove(), 4500);
 }
+let lastManualLoadAt = 0;
 async function mutate(promise){
   if(STATE.offlineMode){ toast("Você está offline — essa ação exige conexão com a internet."); return false; }
   const { error } = await promise;
   if(error){ toast("Erro: " + error.message); return false; }
   await loadAll();
+  lastManualLoadAt = Date.now();
   return true;
 }
 function cacheDataLocally(){
-  try{
-    localStorage.setItem("gt_cache_data", JSON.stringify(DB));
-    localStorage.setItem("gt_cache_time", new Date().toISOString());
-  }catch(e){}
+  setTimeout(() => {
+    try{
+      localStorage.setItem("gt_cache_data", JSON.stringify(DB));
+      localStorage.setItem("gt_cache_time", new Date().toISOString());
+    }catch(e){}
+  }, 0);
 }
 function loadCachedData(){
   try{
@@ -323,30 +327,39 @@ async function loadAll(){
     sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true }),
     sb.from("mapas_mentais").select("*")
   ]);
-  DB.usuarios = u.data || [];
-  DB.tarefas = t.data || [];
-  DB.comentarios = c.data || [];
-  DB.notificacoes = n.data || [];
-  DB.temas = tm.data || [];
-  DB.categorias = ci.data || [];
-  DB.criterios = ca.data || [];
-  DB.avaliacoes = av.data || [];
-  DB.avaliacoesNotas = avn.data || [];
-  DB.equipes = eq.data || [];
-  DB.especialidades = es.data || [];
-  DB.ferias = fe.data || [];
-  DB.historico = hi.data || [];
-  DB.escalas = esc_.data || [];
-  DB.subtarefas = sub.data || [];
-  DB.reprogramacoes = rep.data || [];
-  DB.mensagens = msg.data || [];
-  DB.mapasMentais = mm.data || [];
+  if(!u.error) DB.usuarios = u.data || DB.usuarios;
+  if(!t.error) DB.tarefas = t.data || DB.tarefas;
+  if(!c.error) DB.comentarios = c.data || DB.comentarios;
+  if(!n.error) DB.notificacoes = n.data || DB.notificacoes;
+  if(!tm.error) DB.temas = tm.data || DB.temas;
+  if(!ci.error) DB.categorias = ci.data || DB.categorias;
+  if(!ca.error) DB.criterios = ca.data || DB.criterios;
+  if(!av.error) DB.avaliacoes = av.data || DB.avaliacoes;
+  if(!avn.error) DB.avaliacoesNotas = avn.data || DB.avaliacoesNotas;
+  if(!eq.error) DB.equipes = eq.data || DB.equipes;
+  if(!es.error) DB.especialidades = es.data || DB.especialidades;
+  if(!fe.error) DB.ferias = fe.data || DB.ferias;
+  if(!hi.error) DB.historico = hi.data || DB.historico;
+  if(!esc_.error) DB.escalas = esc_.data || DB.escalas;
+  if(!sub.error) DB.subtarefas = sub.data || DB.subtarefas;
+  if(!rep.error) DB.reprogramacoes = rep.data || DB.reprogramacoes;
+  if(!msg.error) DB.mensagens = msg.data || DB.mensagens;
+  if(!mm.error) DB.mapasMentais = mm.data || DB.mapasMentais;
   rankingCache = {};
   cacheDataLocally();
 }
 
 function getUser(id){ return DB.usuarios.find(u => u.id === id); }
 function getDirectReports(id){ return DB.usuarios.filter(u => u.lider_id === id && u.ativo !== false); }
+const SETORES = [
+  { id:"qualidade",  nome:"Qualidade",  icon:"&#9989;", cor:"var(--ok)" },
+  { id:"sesmt",      nome:"SESMT",      icon:"&#9937;", cor:"var(--danger)" },
+  { id:"engenharia", nome:"Engenharia", icon:"&#9881;", cor:"var(--info)" }
+];
+function setorInfo(id){ return SETORES.find(s => s.id === id) || null; }
+function ehMestre(u){ return !!(u && u.is_mestre); }
+function poderesDe(u){ return (u && u.poderes) ? u.poderes : []; }
+function temAlgumPoder(u){ return poderesDe(u).length > 0; }
 function getSubtreeIds(id){
   let ids = [id];
   getDirectReports(id).forEach(u => { ids = ids.concat(getSubtreeIds(u.id)); });
@@ -446,6 +459,8 @@ function render(){
   else if(STATE.screen === "escala") app.innerHTML = cu ? renderShell(cu, "escala", "Minha Escala", renderEscalaContent(cu)) : renderMenu();
   else if(STATE.screen === "agenda") app.innerHTML = cu ? renderShell(cu, "agenda", "Agenda", renderAgendaContent(cu)) : renderMenu();
   else if(STATE.screen === "brainstorm") app.innerHTML = cu ? renderShell(cu, "brainstorm", "Brainstorm", renderBrainstormContent(cu)) : renderMenu();
+  else if(STATE.screen === "acoes") app.innerHTML = cu ? renderShell(cu, "acoes", "Ações setoriais", renderAcoesContent(cu)) : renderMenu();
+  else if(STATE.screen === "permissoes") app.innerHTML = cu ? renderShell(cu, "permissoes", "Permissões", renderPermissoesContent(cu)) : renderMenu();
   else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
   if(STATE.openTaskId){ document.body.insertAdjacentHTML("beforeend", renderTaskModal()); }
@@ -465,6 +480,8 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"escala", label:"Minha Escala", icon:"&#128197;" },
     { key:"agenda", label:"Agenda", icon:"&#128198;" },
     { key:"brainstorm", label:"Brainstorm", icon:"&#128161;" },
+    ...(temAlgumPoder(cu) ? [{ key:"acoes", label:"A\u00e7\u00f5es setoriais", icon:"&#128204;" }] : []),
+    ...(ehMestre(cu) ? [{ key:"permissoes", label:"Permiss\u00f5es", icon:"&#128273;" }] : []),
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
     ...(hasTeam ? [{ key:"mapa", label:"Mapa da Equipe", icon:"&#128506;" }] : []),
     ...(getEquipesRelevantes(cu).length ? [{ key:"chat", label:"Chat da Equipe", icon:"&#128172;" }] : []),
@@ -519,6 +536,8 @@ function goSection(key){
   else if(key === "escala") go("escala");
   else if(key === "agenda") go("agenda");
   else if(key === "brainstorm") go("brainstorm");
+  else if(key === "acoes") go("acoes");
+  else if(key === "permissoes") go("permissoes");
   else if(key === "chat") go("chat");
   else if(key === "perfil") go("perfil");
 }
@@ -893,6 +912,132 @@ function salvarNotaAgenda(userId, dataStr){
 }
 
 // ---------- Brainstorm ----------
+// ---------- A\u00e7\u00f5es setoriais ----------
+function renderAcoesContent(cu){
+  const meusPoderes = poderesDe(cu);
+  if(!meusPoderes.length) return `<p class="empty-hint">Voc\u00ea n\u00e3o tem poder setorial atribu\u00eddo.</p>`;
+  if(!STATE.acaoSetor || !meusPoderes.includes(STATE.acaoSetor)) STATE.acaoSetor = meusPoderes[0];
+
+  const pessoas = DB.usuarios.filter(u => u.ativo !== false && u.id !== cu.id)
+    .sort((a,b) => a.nome.localeCompare(b.nome));
+  const minhasAcoes = DB.tarefas.filter(t => t.origem === "acao" && t.criado_por === cu.id)
+    .sort((a,b) => (b.criado_em||"").localeCompare(a.criado_em||""));
+
+  return `<h1 style="margin-bottom:4px;">A\u00e7\u00f5es setoriais</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Como respons\u00e1vel setorial, voc\u00ea pode atribuir uma a\u00e7\u00e3o a qualquer pessoa da empresa \u2014 independente da hierarquia.</p>
+
+  ${meusPoderes.length > 1 ? `<div class="tabs" style="margin-top:0;">
+    ${meusPoderes.map(p => { const si = setorInfo(p); return `<button class="small ${STATE.acaoSetor===p?'active':''}" onclick="STATE.acaoSetor='${p}';render()">${si?si.icon+' '+esc(si.nome):esc(p)}</button>`; }).join("")}
+  </div>` : `<p style="margin-bottom:12px;"><span class="badge accent">${(()=>{const si=setorInfo(STATE.acaoSetor);return si?si.icon+' '+esc(si.nome):esc(STATE.acaoSetor);})()}</span></p>`}
+
+  <div class="card" style="margin-bottom:18px;">
+    <h3 style="margin-bottom:10px;">Nova a\u00e7\u00e3o</h3>
+    <label class="field-label">Atribuir para</label>
+    <select id="ac-quem" style="margin-bottom:10px;">
+      ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)} \u2014 ${esc(p.cargo)}${equipeNome(p.equipe_id)?' ('+esc(equipeNome(p.equipe_id))+')':''}</option>`).join("")}
+    </select>
+    <label class="field-label">T\u00edtulo da a\u00e7\u00e3o</label>
+    <input id="ac-titulo" placeholder="O que precisa ser feito?" style="margin-bottom:10px;" />
+    <label class="field-label">Tema</label>
+    <select id="ac-tema" style="margin-bottom:10px;">${DB.temas.map(t=>`<option value="${t.id}">${esc(t.nome)}</option>`).join("")}</select>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:1;"><label class="field-label">Prioridade</label>
+        <select id="ac-prioridade"><option>Alta</option><option selected>M\u00e9dia</option><option>Baixa</option></select></div>
+      <div style="flex:1;"><label class="field-label">Prazo</label><input id="ac-prazo" type="date" /></div>
+    </div>
+    <label class="field-label">Instru\u00e7\u00e3o / o que deve ser feito</label>
+    <textarea id="ac-instrucao" rows="2" placeholder="Detalhe a a\u00e7\u00e3o para quem vai executar" style="margin-bottom:12px;"></textarea>
+    <button class="primary" style="width:100%;" onclick="submitAcao('${cu.id}')" ${STATE.submitting?'disabled':''}>${STATE.submitting?'Criando\u2026':'Atribuir a\u00e7\u00e3o'}</button>
+  </div>
+
+  <h3 style="margin-bottom:10px;">A\u00e7\u00f5es que eu abri</h3>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    ${minhasAcoes.length ? minhasAcoes.map(t => {
+      const alvo = getUser(t.atribuido_a);
+      const si = setorInfo(t.setor_acao);
+      return `<div class="task-card row" style="justify-content:space-between;--strip:${farolStripColor(t)};" onclick="openTask('${t.id}')">
+        <div class="row">${avatarHtml(alvo,26)}<div>
+          <div style="font-size:13.5px;font-weight:700;">${esc(t.titulo)}</div>
+          <div class="muted-text">${alvo?esc(alvo.nome):'?'} \u00b7 <span class="mono">${fmtDate(t.prazo)}</span>${si?' \u00b7 '+si.icon+' '+esc(si.nome):''}</div>
+        </div></div>
+        ${badgeHtml(t)}
+      </div>`;
+    }).join("") : `<p class="empty-hint">Voc\u00ea ainda n\u00e3o abriu nenhuma a\u00e7\u00e3o.</p>`}
+  </div>`;
+}
+async function submitAcao(userId){
+  if(STATE.submitting) return;
+  const atribuidoA = document.getElementById("ac-quem").value;
+  const titulo = document.getElementById("ac-titulo").value.trim();
+  const temaId = document.getElementById("ac-tema").value;
+  const prioridade = document.getElementById("ac-prioridade").value;
+  const prazo = document.getElementById("ac-prazo").value || todayISO();
+  const instrucao = document.getElementById("ac-instrucao").value.trim();
+  if(!titulo || !atribuidoA) return;
+  STATE.submitting = true; render();
+  const cu = getUser(userId);
+  const si = setorInfo(STATE.acaoSetor);
+  const { data, error } = await sb.from("tarefas").insert({
+    titulo, tema_id: temaId, prioridade, prazo, status:"a_fazer",
+    origem:"acao", setor_acao: STATE.acaoSetor, instrucao: instrucao || null,
+    criado_por: userId, atribuido_a: atribuidoA
+  }).select().single();
+  STATE.submitting = false;
+  if(error){ toast("Erro ao criar a\u00e7\u00e3o: " + error.message); render(); return; }
+  DB.tarefas.push(data);
+  addNotif(atribuidoA, "acao_atribuida", `${cu.nome} (${si?si.nome:'setor'}) atribuiu a a\u00e7\u00e3o "${titulo}" a voc\u00ea`);
+  toast("A\u00e7\u00e3o atribu\u00edda.");
+  render();
+  lastManualLoadAt = Date.now();
+  loadAll();
+}
+
+// ---------- Permiss\u00f5es (usu\u00e1rio mestre) ----------
+function renderPermissoesContent(cu){
+  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usu\u00e1rio mestre pode gerenciar permiss\u00f5es.</p>`;
+  const pessoas = DB.usuarios.filter(u => u.ativo !== false).sort((a,b) => a.nome.localeCompare(b.nome));
+  return `<h1 style="margin-bottom:4px;">Permiss\u00f5es</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Quem recebe um poder setorial pode atribuir a\u00e7\u00f5es a qualquer pessoa da empresa, mesmo fora da pr\u00f3pria equipe.</p>
+  <div class="card" style="margin-bottom:16px;background:var(--info-bg);border-color:#c9dcea;">
+    <p style="font-size:12.5px;margin:0;">${SETORES.map(s=>`${s.icon} <strong>${esc(s.nome)}</strong>`).join(" \u00b7 ")}</p>
+  </div>
+  <div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <thead><tr style="text-align:left;border-bottom:2px solid var(--border);">
+      <th style="padding:8px 10px;">Pessoa</th>
+      ${SETORES.map(s=>`<th style="padding:8px 10px;text-align:center;">${s.icon} ${esc(s.nome)}</th>`).join("")}
+    </tr></thead>
+    <tbody>
+      ${pessoas.map(p => `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px 10px;">
+          <div class="row" style="gap:8px;">${avatarHtml(p,26)}<div>
+            <div style="font-weight:700;">${esc(p.nome)}${p.is_mestre?' <span class="badge accent">mestre</span>':''}</div>
+            <div class="muted-text">${esc(p.cargo)}</div>
+          </div></div>
+        </td>
+        ${SETORES.map(s => `<td style="padding:8px 10px;text-align:center;">
+          <input type="checkbox" style="width:auto;" ${poderesDe(p).includes(s.id)?'checked':''} onchange="togglePoder('${p.id}','${s.id}')" />
+        </td>`).join("")}
+      </tr>`).join("")}
+    </tbody>
+  </table>
+  </div>`;
+}
+async function togglePoder(usuarioId, setorId){
+  const u = getUser(usuarioId);
+  if(!u) return;
+  const atuais = new Set(poderesDe(u));
+  if(atuais.has(setorId)) atuais.delete(setorId); else atuais.add(setorId);
+  const novos = [...atuais];
+  const { error } = await sb.from("usuarios").update({ poderes: novos }).eq("id", usuarioId);
+  if(error){ toast("Erro ao salvar permiss\u00e3o: " + error.message); render(); return; }
+  u.poderes = novos;
+  toast(`Permiss\u00f5es de ${u.nome.split(" ")[0]} atualizadas.`);
+  render();
+  lastManualLoadAt = Date.now();
+  loadAll();
+}
+
 function renderBrainstormContent(cu){
   if(!STATE.brainstormTab) STATE.brainstormTab = "notas";
   return `<h1 style="margin-bottom:4px;">Brainstorm</h1>
@@ -1545,6 +1690,7 @@ function teardownRealtime(){
 function handleRealtimeChange(){
   clearTimeout(realtimeDebounce);
   realtimeDebounce = setTimeout(async () => {
+    if(Date.now() - lastManualLoadAt < 1500) return;
     await loadAll();
     const tag = document.activeElement && document.activeElement.tagName;
     if(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -1878,14 +2024,18 @@ async function submitPropose(userId){
   if(!titulo) return;
   STATE.submitting = true; render();
   const cu = getUser(userId);
-  const ok = await mutate(sb.from("tarefas").insert({
+  const { data, error } = await sb.from("tarefas").insert({
     titulo, tema_id: temaId, prioridade:"Média", prazo, status:"a_fazer",
     origem:"liderado", criado_por: userId, atribuido_a: userId
-  }));
-  if(ok && cu.lider_id) await addNotif(cu.lider_id, "tarefa_criada", `${cu.nome} criou a tarefa "${titulo}"`);
-  STATE.showProposeForm = false;
+  }).select().single();
   STATE.submitting = false;
-  await loadAll(); render();
+  if(error){ toast("Erro ao criar tarefa: " + error.message); render(); return; }
+  DB.tarefas.push(data);
+  if(cu.lider_id) addNotif(cu.lider_id, "tarefa_criada", `${cu.nome} criou a tarefa "${titulo}"`);
+  STATE.showProposeForm = false;
+  render();
+  lastManualLoadAt = Date.now();
+  loadAll();
 }
 
 // ---------- Minha equipe ----------
@@ -2132,13 +2282,17 @@ async function submitNewTask(){
   const prazo = document.getElementById("nt-prazo").value || todayISO();
   if(!titulo) return;
   STATE.submitting = true; render();
-  const ok = await mutate(sb.from("tarefas").insert({
+  const { data, error } = await sb.from("tarefas").insert({
     titulo, tema_id: temaId, prioridade, prazo, status:"a_fazer",
     origem:"lider", criado_por: STATE.currentUserId, atribuido_a: atribuidoA
-  }));
-  if(ok) STATE.showNewTaskForm = false;
+  }).select().single();
   STATE.submitting = false;
+  if(error){ toast("Erro ao criar tarefa: " + error.message); render(); return; }
+  DB.tarefas.push(data);
+  STATE.showNewTaskForm = false;
   render();
+  lastManualLoadAt = Date.now();
+  loadAll();
 }
 
 function renderFila(cu, fila){
@@ -2384,7 +2538,11 @@ function farolStripColor(t){
 function prioridadeIcon(p){ return { Alta:"&#128293;", Média:"&#9889;", Baixa:"&#127793;" }[p] || ""; }
 function taskCardHtml(t, showAssignee){
   const assignee = getUser(t.atribuido_a);
-  const canDrag = t.atribuido_a === STATE.currentUserId && ["a_fazer","em_andamento","concluida"].includes(t.status);
+  const isOwner = t.atribuido_a === STATE.currentUserId;
+  const isAncestor = !isOwner && getSubtreeIds(STATE.currentUserId).includes(t.atribuido_a);
+  const canDragStatus = isOwner && ["a_fazer","em_andamento","concluida"].includes(t.status);
+  const canDragPriority = isOwner || isAncestor;
+  const canDrag = canDragStatus || canDragPriority;
   return `<div class="task-card" style="--strip:${farolStripColor(t)};" ${canDrag?`draggable="true" ondragstart="onDragStartTask(event,'${t.id}')" ondragend="onDragEndTask(event)"`:""} onclick="openTask('${t.id}')">
     <p style="font-size:13.5px;font-weight:700;margin:0 0 7px;">${esc(t.titulo)}</p>
     <div class="row" style="justify-content:space-between;margin-bottom:7px;">
@@ -2393,7 +2551,7 @@ function taskCardHtml(t, showAssignee){
         <span class="badge muted">${esc(temaNome(t.tema_id))}</span>
       </div>
       ${showAssignee && assignee ? avatarHtml(assignee,22) : ""}
-    </div>${badgeHtml(t)}
+    </div>${badgeHtml(t)}${(() => { const si = setorInfo(t.setor_acao); return si ? ` <span class="badge" style="background:${si.cor};color:#fff;">${si.icon} ${esc(si.nome)}</span>` : ""; })()}
   </div>`;
 }
 const STATUS_STYLE = {
@@ -2421,15 +2579,37 @@ async function onDropTask(event, newStatus){
   if(!taskId) return;
   const t = DB.tarefas.find(x => x.id === taskId);
   if(!t || t.status === newStatus || t.atribuido_a !== STATE.currentUserId) return;
-  await mutate(sb.from("tarefas").update({ status: newStatus }).eq("id", taskId));
+  const statusAnterior = t.status;
+  t.status = newStatus;
   render();
+  const { error } = await sb.from("tarefas").update({ status: newStatus }).eq("id", taskId);
+  if(error){ t.status = statusAnterior; toast("Erro ao mover: " + error.message); render(); }
+  else{ lastManualLoadAt = Date.now(); loadAll(); }
 }
-function kanbanColHtml(title, count, bodyHtml, style, dropStatus){
+async function onDropPriority(event, novaPrioridade){
+  event.preventDefault();
+  event.currentTarget.classList.remove("kanban-col-dragover");
+  const taskId = draggedTaskId || (event.dataTransfer && event.dataTransfer.getData("text/plain"));
+  draggedTaskId = null;
+  if(!taskId) return;
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t || t.prioridade === novaPrioridade) return;
+  const isOwner = t.atribuido_a === STATE.currentUserId;
+  const isAncestor = !isOwner && getSubtreeIds(STATE.currentUserId).includes(t.atribuido_a);
+  if(!isOwner && !isAncestor) return;
+  const prioridadeAnterior = t.prioridade;
+  t.prioridade = novaPrioridade;
+  render();
+  const { error } = await sb.from("tarefas").update({ prioridade: novaPrioridade }).eq("id", taskId);
+  if(error){ t.prioridade = prioridadeAnterior; toast("Erro ao mover: " + error.message); render(); }
+  else{ lastManualLoadAt = Date.now(); loadAll(); }
+}
+function kanbanColHtml(title, count, bodyHtml, style, dropCall){
   const headerBg = style ? `background:${style.grad};` : "";
   const titleColor = style ? "color:#fff;" : "";
   const countStyle = style ? "background:rgba(255,255,255,.28);color:#fff;" : "";
-  const dropAttrs = dropStatus
-    ? `ondragover="event.preventDefault();this.classList.add('kanban-col-dragover');" ondragleave="this.classList.remove('kanban-col-dragover');" ondrop="onDropTask(event,'${dropStatus}')"`
+  const dropAttrs = dropCall
+    ? `ondragover="event.preventDefault();this.classList.add('kanban-col-dragover');" ondragleave="this.classList.remove('kanban-col-dragover');" ondrop="${dropCall}"`
     : "";
   return `<div class="kanban-col" ${dropAttrs}>
     <div class="kanban-col-header" style="${headerBg}border-radius:9px;padding:8px 10px;margin-bottom:2px;">
@@ -2445,7 +2625,7 @@ function renderTaskViews(tasks){
     const cols = { a_fazer: [], em_andamento: [], concluida: [] };
     tasks.forEach(t => { if(cols[t.status]) cols[t.status].push(t); });
     return `<div class="grid3">${["a_fazer","em_andamento","concluida"].map(s =>
-      kanbanColHtml(statusLabel(s), (cols[s]||[]).length, (cols[s]||[]).map(t=>taskCardHtml(t, true)).join(""), STATUS_STYLE[s], s)
+      kanbanColHtml(statusLabel(s), (cols[s]||[]).length, (cols[s]||[]).map(t=>taskCardHtml(t, true)).join(""), STATUS_STYLE[s], `onDropTask(event,'${s}')`)
     ).join("")}</div>`;
   }
   if(STATE.view === "lista"){
@@ -2462,7 +2642,7 @@ function renderTaskViews(tasks){
   const cols = { Alta: [], Média: [], Baixa: [] };
   tasks.forEach(t => { (cols[t.prioridade] = cols[t.prioridade] || []).push(t); });
   return `<div class="grid3">${["Alta","Média","Baixa"].map(p =>
-    kanbanColHtml(p, (cols[p]||[]).length, (cols[p]||[]).map(t=>taskCardHtml(t, true)).join(""), PRIORIDADE_STYLE[p])
+    kanbanColHtml(p, (cols[p]||[]).length, (cols[p]||[]).map(t=>taskCardHtml(t, true)).join(""), PRIORIDADE_STYLE[p], `onDropPriority(event,'${p}')`)
   ).join("")}</div>`;
 }
 
@@ -2612,6 +2792,10 @@ function renderTaskModal(){
   const isOwner = t.atribuido_a === cu.id;
   const isLeaderOfOwner = assignee && assignee.lider_id === cu.id;
   const isAncestorOfOwner = assignee && assignee.id !== cu.id && getSubtreeIds(cu.id).includes(assignee.id);
+  const isAutorAcao = t.origem === "acao" && t.criado_por === cu.id;
+  const podeGerenciar = isAncestorOfOwner || isAutorAcao;
+  const setorTarefa = setorInfo(t.setor_acao);
+  const autorAcao = t.origem === "acao" ? getUser(t.criado_por) : null;
   const comments = DB.comentarios.filter(c => c.tarefa_id === t.id).sort((a,b)=>new Date(a.criado_em)-new Date(b.criado_em));
   const catOpts = DB.categorias.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join("");
   return `<div class="modal-overlay" onclick="if(event.target===this) closeTask()">
@@ -2620,9 +2804,13 @@ function renderTaskModal(){
         <h2>${esc(t.titulo)}</h2><button class="ghost small" onclick="closeTask()" aria-label="Fechar">&#10005;</button>
       </div>
       <p class="muted-text" style="margin-bottom:10px;">${assignee?esc(assignee.nome):"Sem responsável"} · ${esc(temaNome(t.tema_id))} · prazo ${fmtDate(t.prazo)}</p>
+      ${setorTarefa ? `<div class="card" style="background:var(--surface-2);margin-bottom:12px;padding:10px 12px;">
+        <p style="font-size:12.5px;margin:0;"><span class="badge" style="background:${setorTarefa.cor};color:#fff;">${setorTarefa.icon} A\u00e7\u00e3o de ${esc(setorTarefa.nome)}</span>
+        ${autorAcao ? ` &nbsp;aberta por <strong>${esc(autorAcao.nome)}</strong>` : ""}</p>
+      </div>` : ""}
       <div class="row" style="margin-bottom:14px;gap:6px;">
         ${badgeHtml(t)}
-        ${(isOwner || isAncestorOfOwner)
+        ${(isOwner || podeGerenciar)
           ? `<select onchange="changePrioridade('${t.id}', this.value)" style="width:auto;padding:3px 8px;font-size:11px;">
               <option value="Alta" ${t.prioridade==='Alta'?'selected':''}>Alta</option>
               <option value="Média" ${t.prioridade==='Média'?'selected':''}>Média</option>
@@ -2630,7 +2818,7 @@ function renderTaskModal(){
             </select>`
           : `<span class="badge muted">${esc(t.prioridade)}</span>`}
       </div>
-      ${renderInstrucao(t, isAncestorOfOwner)}
+      ${renderInstrucao(t, podeGerenciar)}
       ${isOwner && ["a_fazer","em_andamento","concluida"].includes(t.status) ? `
         <label class="field-label">Meu status</label>
         <select onchange="changeStatus('${t.id}', this.value)" style="margin-bottom:14px;">
@@ -2638,10 +2826,10 @@ function renderTaskModal(){
           <option value="em_andamento" ${t.status==='em_andamento'?'selected':''}>Em andamento</option>
           <option value="concluida" ${t.status==='concluida'?'selected':''}>Concluída</option>
         </select>` : ""}
-      ${renderReprogramacao(t, isOwner, isAncestorOfOwner)}
-      ${isLeaderOfOwner && t.status === "impedida" ? `
+      ${renderReprogramacao(t, isOwner, podeGerenciar)}
+      ${(isLeaderOfOwner || isAutorAcao) && t.status === "impedida" ? `
         <button class="primary" style="width:100%;margin-bottom:14px;" onclick="resolverImpedimento('${t.id}')">Marcar impedimento como resolvido</button>` : ""}
-      ${isAncestorOfOwner && ["a_fazer","em_andamento","impedida"].includes(t.status) ? `
+      ${podeGerenciar && ["a_fazer","em_andamento","impedida"].includes(t.status) ? `
         <button style="width:100%;margin-bottom:14px;color:var(--danger);" onclick="cancelarTarefa('${t.id}')">Cancelar tarefa</button>` : ""}
       ${renderChecklist(t.id)}
       <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
@@ -2681,12 +2869,24 @@ function renderTaskModal(){
   </div>`;
 }
 async function changeStatus(taskId, status){
-  await mutate(sb.from("tarefas").update({ status }).eq("id", taskId));
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t) return;
+  const anterior = t.status;
+  t.status = status;
   openTask(taskId);
+  const { error } = await sb.from("tarefas").update({ status }).eq("id", taskId);
+  if(error){ t.status = anterior; toast("Erro ao salvar: " + error.message); openTask(taskId); }
+  else{ lastManualLoadAt = Date.now(); loadAll(); }
 }
 async function changePrioridade(taskId, prioridade){
-  await mutate(sb.from("tarefas").update({ prioridade }).eq("id", taskId));
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t) return;
+  const anterior = t.prioridade;
+  t.prioridade = prioridade;
   openTask(taskId);
+  const { error } = await sb.from("tarefas").update({ prioridade }).eq("id", taskId);
+  if(error){ t.prioridade = anterior; toast("Erro ao salvar: " + error.message); openTask(taskId); }
+  else{ lastManualLoadAt = Date.now(); loadAll(); }
 }
 async function cancelarTarefa(taskId){
   if(!confirm("Cancelar esta tarefa? Ela sai da lista ativa, mas o histórico continua registrado.")) return;
