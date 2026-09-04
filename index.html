@@ -213,7 +213,7 @@ const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
 const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
-let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [], mapasMentais: [], cancelamentos: [], reunioes: [] };
+let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [], mapasMentais: [], cancelamentos: [], reunioes: [], salas: [], agendaPublica: [] };
 let SESSION = null;
 let deviosChart = null;
 let STATE = {
@@ -254,6 +254,14 @@ let STATE = {
   solicitarCancelOpen: null,
   cancelRecusarOpen: null,
   novaReuniaoOpen: false,
+  adminBusca: "",
+  adminPessoa: "todos",
+  adminStatus: "todos",
+  salaSelecionada: "todas",
+  novaSalaOpen: false,
+  salaViewMode: "cronograma",
+  publicoSala: "todas",
+  publicoFormOpen: false,
   navOpen: false,
   busy: false,
   submitting: false
@@ -305,17 +313,21 @@ function loadCachedData(){
 
 // ---------- DATA LOADING ----------
 async function loadPublicOrg(){
-  const [u, eq, es] = await Promise.all([
+  const [u, eq, es, sal, ag] = await Promise.all([
     sb.from("usuarios").select("*"),
     sb.from("equipes").select("*"),
-    sb.from("especialidades").select("*")
+    sb.from("especialidades").select("*"),
+    sb.from("salas_reuniao").select("*"),
+    sb.from("vw_agenda_salas").select("*")
   ]);
+  if(!sal.error) DB.salas = sal.data || [];
+  if(!ag.error) DB.agendaPublica = ag.data || [];
   if(!u.error) DB.usuarios = u.data || [];
   if(!eq.error) DB.equipes = eq.data || [];
   if(!es.error) DB.especialidades = es.data || [];
 }
 async function loadAll(){
-  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg,mm,scl,reu] = await Promise.all([
+  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg,mm,scl,reu,sal] = await Promise.all([
     sb.from("usuarios").select("*"),
     sb.from("tarefas").select("*"),
     sb.from("comentarios_tarefa").select("*"),
@@ -335,7 +347,8 @@ async function loadAll(){
     sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true }),
     sb.from("mapas_mentais").select("*"),
     sb.from("solicitacoes_cancelamento").select("*"),
-    sb.from("reunioes").select("*")
+    sb.from("reunioes").select("*"),
+    sb.from("salas_reuniao").select("*")
   ]);
   if(!u.error) DB.usuarios = u.data || DB.usuarios;
   if(!t.error) DB.tarefas = t.data || DB.tarefas;
@@ -357,6 +370,7 @@ async function loadAll(){
   if(!mm.error) DB.mapasMentais = mm.data || DB.mapasMentais;
   if(!scl.error) DB.cancelamentos = scl.data || DB.cancelamentos;
   if(!reu.error) DB.reunioes = reu.data || DB.reunioes;
+  if(!sal.error) DB.salas = sal.data || DB.salas;
   rankingCache = {};
   cacheDataLocally();
 }
@@ -475,6 +489,9 @@ function render(){
   else if(STATE.screen === "acoes") app.innerHTML = cu ? renderShell(cu, "acoes", "Ações setoriais", renderAcoesContent(cu)) : renderMenu();
   else if(STATE.screen === "painelacoes") app.innerHTML = cu ? renderShell(cu, "painelacoes", "Painel de Ações", renderPainelAcoesContent(cu)) : renderMenu();
   else if(STATE.screen === "reunioes") app.innerHTML = cu ? renderShell(cu, "reunioes", "Reuniões", renderReunioesContent(cu)) : renderMenu();
+  else if(STATE.screen === "admin") app.innerHTML = cu ? renderShell(cu, "admin", "Administração", renderAdminContent(cu)) : renderMenu();
+  else if(STATE.screen === "salas") app.innerHTML = cu ? renderShell(cu, "salas", "Salas de reunião", renderSalasContent(cu)) : renderMenu();
+  else if(STATE.screen === "salaspublico") app.innerHTML = renderSalasPublico();
   else if(STATE.screen === "permissoes") app.innerHTML = cu ? renderShell(cu, "permissoes", "Permissões", renderPermissoesContent(cu)) : renderMenu();
   else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
@@ -497,7 +514,9 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"brainstorm", label:"Brainstorm", icon:"&#128161;" },
     { key:"painelacoes", label:"Painel de A\u00e7\u00f5es", icon:"&#128203;" },
     { key:"reunioes", label:"Reuni\u00f5es", icon:"&#128197;" },
+    { key:"salas", label:"Salas de reuni\u00e3o", icon:"&#127970;" },
     ...(temAlgumPoder(cu) ? [{ key:"acoes", label:"A\u00e7\u00f5es setoriais", icon:"&#128204;" }] : []),
+    ...(ehMestre(cu) ? [{ key:"admin", label:"Todas as tarefas", icon:"&#128736;" }] : []),
     ...(ehMestre(cu) ? [{ key:"permissoes", label:"Permiss\u00f5es", icon:"&#128273;" }] : []),
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
     ...(hasTeam ? [{ key:"mapa", label:"Mapa da Equipe", icon:"&#128506;" }] : []),
@@ -556,6 +575,8 @@ function goSection(key){
   else if(key === "acoes") go("acoes");
   else if(key === "painelacoes") go("painelacoes");
   else if(key === "reunioes") go("reunioes");
+  else if(key === "salas") go("salas");
+  else if(key === "admin") go("admin");
   else if(key === "permissoes") go("permissoes");
   else if(key === "chat") go("chat");
   else if(key === "perfil") go("perfil");
@@ -681,6 +702,7 @@ function renderMenu(){
   return renderAuthShell();
 }
 async function openOrgFromMenu(){ await loadPublicOrg(); go("org"); }
+async function openSalasFromMenu(){ await loadPublicOrg(); go("salaspublico"); }
 
 function getCargoIcon(cargo){
   const c = (cargo||"").toLowerCase();
@@ -933,6 +955,337 @@ function salvarNotaAgenda(userId, dataStr){
 }
 
 // ---------- Brainstorm ----------
+// ---------- Salas de reuni\u00e3o ----------
+function salaNome(id){ const s = DB.salas.find(x => x.id === id); return s ? s.nome : null; }
+function reunioesDaSala(salaId, incluirSolicitadas){
+  return DB.reunioes
+    .filter(r => r.sala_id && (salaId === "todas" || r.sala_id === salaId))
+    .filter(r => r.status !== "recusada")
+    .filter(r => incluirSolicitadas || r.status === "confirmada")
+    .sort((a,b) => (a.data||"").localeCompare(b.data||"") || (a.hora_inicio||"").localeCompare(b.hora_inicio||""));
+}
+function haConflito(r){
+  if(!r.sala_id || !r.hora_inicio || !r.hora_fim) return false;
+  return DB.reunioes.some(o =>
+    o.id !== r.id && o.sala_id === r.sala_id && o.data === r.data &&
+    o.status !== "recusada" && o.hora_inicio && o.hora_fim &&
+    o.hora_inicio < r.hora_fim && r.hora_inicio < o.hora_fim
+  );
+}
+function renderGanttSalas(salaId){
+  const hoje = todayISO();
+  const fim = new Date(); fim.setDate(fim.getDate() + 29);
+  const fimStr = fim.toISOString().slice(0,10);
+  const lista = reunioesDaSala(salaId, true).filter(r => r.data >= hoje && r.data <= fimStr);
+  if(!lista.length) return `<p class="empty-hint">Nada agendado nos pr\u00f3ximos 30 dias.</p>`;
+
+  const salas = salaId === "todas"
+    ? DB.salas.filter(s => lista.some(r => r.sala_id === s.id))
+    : DB.salas.filter(s => s.id === salaId);
+  const inicio = new Date(hoje + "T00:00:00");
+  const totalDias = 30;
+  const offset = d => Math.round((new Date(d+"T00:00:00") - inicio) / 86400000);
+
+  const linhas = salas.map(s => {
+    const barras = lista.filter(r => r.sala_id === s.id).map(r => {
+      const dia = offset(r.data);
+      if(dia < 0 || dia >= totalDias) return "";
+      const left = (dia / totalDias) * 100;
+      const width = (1 / totalDias) * 100;
+      const cor = r.status === "solicitada" ? "var(--warn)" : (haConflito(r) ? "var(--danger)" : "var(--brand-blue)");
+      return `<div title="${esc(r.titulo)} \u2014 ${fmtDate(r.data)}${r.hora_inicio?' '+esc(r.hora_inicio):''}${r.status==='solicitada'?' (solicitada)':''}"
+        style="position:absolute;left:${left}%;width:${Math.max(width,1.6)}%;top:4px;bottom:4px;background:${cor};border-radius:3px;"></div>`;
+    }).join("");
+    return `<div style="display:flex;align-items:center;gap:8px;height:34px;">
+      <div style="width:130px;flex-shrink:0;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.nome)}</div>
+      <div style="position:relative;flex:1;height:24px;background:var(--surface-2);border-radius:6px;">${barras}</div>
+    </div>`;
+  }).join("");
+
+  return `<div class="card" style="overflow-x:auto;">
+    <h3 style="margin-bottom:2px;">Ocupa\u00e7\u00e3o \u2014 pr\u00f3ximos 30 dias</h3>
+    <p class="muted-text" style="margin:0 0 10px;">azul = confirmada \u00b7 amarelo = solicitada \u00b7 vermelho = conflito de hor\u00e1rio</p>
+    <div style="min-width:460px;display:flex;flex-direction:column;gap:4px;">${linhas}</div>
+  </div>`;
+}
+function renderSalasContent(cu){
+  const salas = DB.salas.filter(s => s.ativa !== false);
+  const pendentes = DB.reunioes.filter(r => r.sala_id && r.status === "solicitada");
+  const lista = reunioesDaSala(STATE.salaSelecionada, true).filter(r => r.data >= todayISO());
+
+  return `<h1 style="margin-bottom:4px;">Salas de reuni\u00e3o</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Cadastro das salas e cronograma de ocupa\u00e7\u00e3o, alimentado pelos agendamentos da aba Reuni\u00f5es.</p>
+
+  ${pendentes.length ? `<div class="card" style="background:var(--warn-bg);border-color:#ecd8a0;margin-bottom:16px;">
+    <p style="font-size:12px;font-weight:700;color:var(--warn-text);margin:0 0 8px;">&#9888; ${pendentes.length} solicita\u00e7\u00e3o(\u00f5es) de sala aguardando confirma\u00e7\u00e3o</p>
+    ${pendentes.map(r => `<div class="row" style="justify-content:space-between;padding:6px 0;border-top:1px solid #ecd8a0;flex-wrap:wrap;gap:6px;">
+      <div style="min-width:0;flex:1;">
+        <div style="font-size:13px;font-weight:700;">${esc(r.titulo)}</div>
+        <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} \u00b7 ${fmtDate(r.data)}${r.hora_inicio?` ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}</div>
+        <div class="muted-text">pedido por ${esc(r.solicitante_nome||'?')}${r.solicitante_contato?` \u00b7 ${esc(r.solicitante_contato)}`:''}</div>
+        ${haConflito(r) ? `<div style="font-size:11.5px;color:var(--danger-text);font-weight:700;">&#9888; conflita com outra reserva</div>` : ""}
+      </div>
+      <div class="row" style="flex-shrink:0;">
+        <button class="small ghost" onclick="decidirSolicitacao('${r.id}','recusada')">Recusar</button>
+        <button class="small primary" onclick="decidirSolicitacao('${r.id}','confirmada')">Confirmar</button>
+      </div>
+    </div>`).join("")}
+  </div>` : ""}
+
+  <div class="row" style="gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+    <select style="width:auto;" onchange="STATE.salaSelecionada=this.value;render()">
+      <option value="todas">Todas as salas</option>
+      ${salas.map(s => `<option value="${s.id}" ${STATE.salaSelecionada===s.id?'selected':''}>${esc(s.nome)}</option>`).join("")}
+    </select>
+    <div class="tabs" style="margin:0;">
+      <button class="small ${STATE.salaViewMode==='cronograma'?'active':''}" onclick="STATE.salaViewMode='cronograma';render()">Cronograma</button>
+      <button class="small ${STATE.salaViewMode==='gantt'?'active':''}" onclick="STATE.salaViewMode='gantt';render()">Gr\u00e1fico de Gantt</button>
+    </div>
+    <button class="small" onclick="STATE.novaSalaOpen=!STATE.novaSalaOpen;render()"><span style="margin-right:4px;">+</span>Cadastrar sala</button>
+  </div>
+
+  ${STATE.novaSalaOpen ? `<div class="card" style="margin-bottom:16px;">
+    <h3 style="margin-bottom:10px;">Nova sala</h3>
+    <label class="field-label">Nome</label>
+    <input id="sa-nome" placeholder="Ex: Sala de Reuni\u00e3o 3" style="margin-bottom:10px;" />
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:1;"><label class="field-label">Capacidade</label><input id="sa-capacidade" type="number" min="1" placeholder="10" /></div>
+      <div style="flex:2;"><label class="field-label">Localiza\u00e7\u00e3o</label><input id="sa-local" placeholder="Ex: 2\u00ba andar" /></div>
+    </div>
+    <label class="field-label">Recursos</label>
+    <input id="sa-recursos" placeholder="Ex: projetor, TV, videoconfer\u00eancia" style="margin-bottom:12px;" />
+    <div class="row">
+      <button class="ghost" onclick="STATE.novaSalaOpen=false;render()">Cancelar</button>
+      <button class="primary" onclick="submitSala()">Cadastrar</button>
+    </div>
+  </div>` : ""}
+
+  ${STATE.salaViewMode === "gantt" ? renderGanttSalas(STATE.salaSelecionada) : `
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    ${lista.length ? lista.map(r => {
+      const conflito = haConflito(r);
+      return `<div class="card" style="border-left:4px solid ${r.status==='solicitada'?'var(--warn)':(conflito?'var(--danger)':'var(--brand-blue)')};">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <div style="font-size:14px;font-weight:700;">${esc(r.titulo)}</div>
+            <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} \u00b7 ${fmtDate(r.data)}${r.hora_inicio?` \u00b7 ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}</div>
+            ${r.pauta ? `<p class="muted-text" style="margin:6px 0 0;">${esc(r.pauta)}</p>` : ""}
+            ${r.solicitante_nome ? `<div class="muted-text" style="font-size:11px;margin-top:4px;">solicitado por ${esc(r.solicitante_nome)}</div>` : ""}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <span class="badge ${r.status==='solicitada'?'warn':'ok'}">${r.status==='solicitada'?'Solicitada':'Confirmada'}</span>
+            ${conflito ? `<div style="margin-top:4px;"><span class="badge danger">&#9888; conflito</span></div>` : ""}
+          </div>
+        </div>
+      </div>`;
+    }).join("") : `<p class="empty-hint">Nenhuma reserva futura nessa sala.</p>`}
+  </div>`}
+
+  ${salas.length ? `<h3 style="margin:20px 0 10px;">Salas cadastradas</h3>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    ${salas.map(s => `<div class="card row" style="justify-content:space-between;">
+      <div>
+        <div style="font-weight:700;font-size:13px;">${esc(s.nome)}</div>
+        <div class="muted-text">${s.capacidade?`${s.capacidade} lugares`:''}${s.localizacao?` \u00b7 ${esc(s.localizacao)}`:''}${s.recursos?` \u00b7 ${esc(s.recursos)}`:''}</div>
+      </div>
+      ${ehMestre(cu) ? `<button class="small ghost" aria-label="Remover" onclick="removerSala('${s.id}')"><span style="color:var(--danger);">&#128465;</span></button>` : ""}
+    </div>`).join("")}
+  </div>` : ""}`;
+}
+async function submitSala(){
+  const nome = document.getElementById("sa-nome").value.trim();
+  const capacidade = document.getElementById("sa-capacidade").value;
+  const localizacao = document.getElementById("sa-local").value.trim();
+  const recursos = document.getElementById("sa-recursos").value.trim();
+  if(!nome){ toast("Informe o nome da sala."); return; }
+  const { error } = await sb.from("salas_reuniao").insert({
+    nome, capacidade: capacidade ? parseInt(capacidade) : null,
+    localizacao: localizacao || null, recursos: recursos || null
+  });
+  if(error){ toast("Erro ao cadastrar: " + error.message); return; }
+  STATE.novaSalaOpen = false;
+  toast("Sala cadastrada.");
+  await loadAll(); render();
+}
+async function removerSala(id){
+  if(!confirm("Remover essa sala? As reuni\u00f5es j\u00e1 agendadas nela ficam sem sala.")) return;
+  const { error } = await sb.from("salas_reuniao").delete().eq("id", id);
+  if(error){ toast("Erro: " + error.message); return; }
+  await loadAll(); render();
+}
+async function decidirSolicitacao(reuniaoId, novoStatus){
+  const { error } = await sb.from("reunioes").update({ status: novoStatus }).eq("id", reuniaoId);
+  if(error){ toast("Erro: " + error.message); return; }
+  toast(novoStatus === "confirmada" ? "Reserva confirmada." : "Solicita\u00e7\u00e3o recusada.");
+  await loadAll(); render();
+}
+
+// ---------- Calend\u00e1rio p\u00fablico de salas (sem login) ----------
+function renderSalasPublico(){
+  const salas = DB.salas.filter(s => s.ativa !== false);
+  const hoje = todayISO();
+  let agenda = DB.agendaPublica.filter(a => a.data >= hoje);
+  if(STATE.publicoSala !== "todas") agenda = agenda.filter(a => a.sala_id === STATE.publicoSala);
+  agenda.sort((a,b) => (a.data||"").localeCompare(b.data||"") || (a.hora_inicio||"").localeCompare(b.hora_inicio||""));
+
+  const porDia = {};
+  agenda.forEach(a => { (porDia[a.data] = porDia[a.data] || []).push(a); });
+
+  return `<div class="brand-stripe"></div>
+  <div class="container" style="max-width:820px;">
+    <button class="ghost small" onclick="go('menu')" style="margin-bottom:16px;">&larr; Voltar</button>
+    <h1 style="margin-bottom:4px;">Calendário das salas de reunião</h1>
+    <p class="muted-text" style="margin-bottom:18px;">Consulta aberta \u2014 mostra apenas a ocupa\u00e7\u00e3o das salas. Para solicitar uma reserva, use o formul\u00e1rio abaixo.</p>
+
+    <div class="row" style="gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <select style="width:auto;" onchange="STATE.publicoSala=this.value;render()">
+        <option value="todas">Todas as salas</option>
+        ${salas.map(s => `<option value="${s.id}" ${STATE.publicoSala===s.id?'selected':''}>${esc(s.nome)}</option>`).join("")}
+      </select>
+      <button class="primary" onclick="STATE.publicoFormOpen=!STATE.publicoFormOpen;render()">
+        ${STATE.publicoFormOpen ? "Fechar formul\u00e1rio" : "+ Solicitar reserva"}
+      </button>
+    </div>
+
+    ${STATE.publicoFormOpen ? `<div class="card" style="margin-bottom:18px;">
+      <h3 style="margin-bottom:4px;">Solicitar reserva de sala</h3>
+      <p class="muted-text" style="margin-bottom:12px;">Sua solicita\u00e7\u00e3o entra como pendente e ser\u00e1 confirmada por algu\u00e9m da equipe.</p>
+      <label class="field-label">Seu nome</label>
+      <input id="pb-nome" placeholder="Nome completo" style="margin-bottom:10px;" />
+      <label class="field-label">Contato (e-mail ou ramal)</label>
+      <input id="pb-contato" placeholder="Para retorno da confirma\u00e7\u00e3o" style="margin-bottom:10px;" />
+      <label class="field-label">Sala</label>
+      <select id="pb-sala" style="margin-bottom:10px;">
+        ${salas.map(s => `<option value="${s.id}">${esc(s.nome)}${s.capacidade?` (${s.capacidade} lugares)`:''}</option>`).join("")}
+      </select>
+      <label class="field-label">Assunto da reuni\u00e3o</label>
+      <input id="pb-titulo" placeholder="Ex: Alinhamento com fornecedor" style="margin-bottom:10px;" />
+      <div class="row" style="margin-bottom:12px;">
+        <div style="flex:1.2;"><label class="field-label">Data</label><input id="pb-data" type="date" /></div>
+        <div style="flex:1;"><label class="field-label">In\u00edcio</label><input id="pb-inicio" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Fim</label><input id="pb-fim" type="time" /></div>
+      </div>
+      <button class="primary" style="width:100%;" onclick="submitSolicitacaoPublica()">Enviar solicita\u00e7\u00e3o</button>
+    </div>` : ""}
+
+    ${Object.keys(porDia).length ? Object.keys(porDia).sort().map(dia => `
+      <h3 style="margin:16px 0 8px;">${fmtDate(dia)}</h3>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${porDia[dia].map(a => `<div class="card row" style="justify-content:space-between;border-left:4px solid ${a.status==='solicitada'?'var(--warn)':'var(--brand-blue)'};">
+          <div style="min-width:0;">
+            <div style="font-size:13.5px;font-weight:700;">${esc(a.titulo)}</div>
+            <div class="muted-text mono">${esc(a.sala_nome)}${a.hora_inicio?` \u00b7 ${esc(a.hora_inicio)}${a.hora_fim?'\u2013'+esc(a.hora_fim):''}`:''}</div>
+          </div>
+          <span class="badge ${a.status==='solicitada'?'warn':'ok'}">${a.status==='solicitada'?'Solicitada':'Confirmada'}</span>
+        </div>`).join("")}
+      </div>`).join("") : `<p class="empty-hint">Nenhuma reserva futura.</p>`}
+  </div>`;
+}
+async function submitSolicitacaoPublica(){
+  const nome = document.getElementById("pb-nome").value.trim();
+  const contato = document.getElementById("pb-contato").value.trim();
+  const salaId = document.getElementById("pb-sala").value;
+  const titulo = document.getElementById("pb-titulo").value.trim();
+  const data = document.getElementById("pb-data").value;
+  const inicio = document.getElementById("pb-inicio").value;
+  const fim = document.getElementById("pb-fim").value;
+  if(nome.length < 3){ toast("Informe seu nome completo."); return; }
+  if(!titulo || !data || !salaId){ toast("Preencha sala, assunto e data."); return; }
+  if(inicio && fim && fim <= inicio){ toast("O hor\u00e1rio de fim deve ser depois do in\u00edcio."); return; }
+
+  const conflito = DB.agendaPublica.some(a =>
+    a.sala_id === salaId && a.data === data && inicio && fim && a.hora_inicio && a.hora_fim &&
+    a.hora_inicio < fim && inicio < a.hora_fim);
+  if(conflito && !confirm("J\u00e1 existe reserva nesse hor\u00e1rio para essa sala. Enviar mesmo assim?")) return;
+
+  const { error } = await sb.from("reunioes").insert({
+    titulo, data, hora_inicio: inicio || null, hora_fim: fim || null,
+    sala_id: salaId, status: "solicitada",
+    solicitante_nome: nome, solicitante_contato: contato || null
+  });
+  if(error){ toast("Erro ao enviar: " + error.message); return; }
+  STATE.publicoFormOpen = false;
+  toast("Solicita\u00e7\u00e3o enviada! Aguarde a confirma\u00e7\u00e3o.");
+  await loadPublicOrg();
+  render();
+}
+
+// ---------- Administra\u00e7\u00e3o (somente mestre) ----------
+function filtrarTarefasAdmin(){
+  let lista = DB.tarefas.slice();
+  const termo = (STATE.adminBusca || "").trim().toLowerCase();
+  if(termo.length >= 2) lista = lista.filter(t => (t.titulo||"").toLowerCase().includes(termo));
+  if(STATE.adminPessoa !== "todos") lista = lista.filter(t => t.atribuido_a === STATE.adminPessoa);
+  if(STATE.adminStatus !== "todos") lista = lista.filter(t => t.status === STATE.adminStatus);
+  lista.sort((a,b) => {
+    const rank = t => t.status === "concluida" ? 2 : (t.status === "cancelada" ? 3 : (farolInfo(t).cls === "danger" ? 0 : 1));
+    const d = rank(a) - rank(b);
+    return d !== 0 ? d : (a.prazo||"").localeCompare(b.prazo||"");
+  });
+  return lista;
+}
+function adminLinhasHtml(){
+  const lista = filtrarTarefasAdmin();
+  if(!lista.length) return `<p class="empty-hint">Nenhuma tarefa nesse filtro.</p>`;
+  return lista.slice(0, 200).map(t => {
+    const resp = getUser(t.atribuido_a);
+    const si = setorInfo(t.setor_acao);
+    return `<div class="task-card row" style="justify-content:space-between;--strip:${farolStripColor(t)};" onclick="openTask('${t.id}')">
+      <div class="row" style="min-width:0;flex:1;">
+        ${resp ? avatarHtml(resp,26) : ""}
+        <div style="min-width:0;">
+          <div class="row" style="gap:5px;">
+            <span title="Prioridade ${esc(t.prioridade)}">${prioridadeIcon(t.prioridade)}</span>
+            <span style="font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t.titulo)}</span>
+          </div>
+          <div class="muted-text">${resp?esc(resp.nome):"sem respons\u00e1vel"} \u00b7 ${esc(temaNome(t.tema_id))} \u00b7 <span class="mono">${fmtDate(t.prazo)}</span>${si?` \u00b7 ${si.icon} ${esc(si.nome)}`:""}</div>
+        </div>
+      </div>
+      <div class="row" style="flex-shrink:0;gap:6px;">
+        <span class="badge muted">${statusLabel(t.status)}</span>
+        ${badgeHtml(t)}
+      </div>
+    </div>`;
+  }).join("") + (lista.length > 200 ? `<p class="muted-text" style="text-align:center;margin-top:8px;">Mostrando as 200 primeiras de ${lista.length}. Refine a busca para ver o resto.</p>` : "");
+}
+function updateAdminBusca(){
+  const input = document.getElementById("admin-busca");
+  const box = document.getElementById("admin-lista");
+  if(!input || !box) return;
+  STATE.adminBusca = input.value;
+  box.innerHTML = adminLinhasHtml();
+}
+function renderAdminContent(cu){
+  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usu\u00e1rio mestre tem acesso a esta tela.</p>`;
+  const pessoas = DB.usuarios.filter(u => u.ativo !== false).sort((a,b) => a.nome.localeCompare(b.nome));
+  const total = DB.tarefas.length;
+  const atrasadas = DB.tarefas.filter(t => !["concluida","cancelada"].includes(t.status) && farolInfo(t).cls === "danger").length;
+  const abertas = DB.tarefas.filter(t => ["a_fazer","em_andamento","impedida"].includes(t.status)).length;
+
+  return `<h1 style="margin-bottom:4px;">Todas as tarefas</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Acesso de mestre: qualquer tarefa do sistema, independente de hierarquia. Clique para abrir e editar, transferir ou cancelar.</p>
+
+  <div class="grid3" style="gap:10px;margin-bottom:16px;">
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;">${total}</div><p class="muted-text" style="margin:0;">Total no sistema</p></div>
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--info);">${abertas}</div><p class="muted-text" style="margin:0;">Em aberto</p></div>
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--danger);">${atrasadas}</div><p class="muted-text" style="margin:0;">Atrasada(s)</p></div>
+  </div>
+
+  <div class="row" style="gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+    <input id="admin-busca" placeholder="Buscar por t\u00edtulo..." value="${esc(STATE.adminBusca||'')}" oninput="updateAdminBusca()" style="max-width:260px;" />
+    <select style="width:auto;" onchange="STATE.adminPessoa=this.value;render()">
+      <option value="todos">Todas as pessoas</option>
+      ${pessoas.map(p => `<option value="${p.id}" ${STATE.adminPessoa===p.id?'selected':''}>${esc(p.nome)}</option>`).join("")}
+    </select>
+    <select style="width:auto;" onchange="STATE.adminStatus=this.value;render()">
+      <option value="todos">Todos os status</option>
+      ${["a_fazer","em_andamento","impedida","concluida","cancelada"].map(s => `<option value="${s}" ${STATE.adminStatus===s?'selected':''}>${statusLabel(s)}</option>`).join("")}
+    </select>
+  </div>
+
+  <div id="admin-lista" style="display:flex;flex-direction:column;gap:8px;">${adminLinhasHtml()}</div>`;
+}
+
 // ---------- Reuni\u00f5es ----------
 function renderReunioesContent(cu){
   const hoje = todayISO();
@@ -976,8 +1329,13 @@ function renderReunioesContent(cu){
         <div style="flex:1;"><label class="field-label">In\u00edcio</label><input id="re-inicio" type="time" /></div>
         <div style="flex:1;"><label class="field-label">Fim</label><input id="re-fim" type="time" /></div>
       </div>
-      <label class="field-label">Local</label>
-      <input id="re-local" placeholder="Ex: Sala de reuni\u00e3o / Teams" style="margin-bottom:10px;" />
+      <label class="field-label">Sala de reunião</label>
+      <select id="re-sala" style="margin-bottom:10px;">
+        <option value="">Sem sala (online ou externo)</option>
+        ${DB.salas.filter(s2 => s2.ativa !== false).map(s2 => `<option value="${s2.id}">${esc(s2.nome)}${s2.capacidade?` (${s2.capacidade} lugares)`:''}</option>`).join("")}
+      </select>
+      <label class="field-label">Local (se não for sala)</label>
+      <input id="re-local" placeholder="Ex: Teams / campo" style="margin-bottom:10px;" />
       <label class="field-label">Pauta</label>
       <textarea id="re-pauta" rows="2" placeholder="O que ser\u00e1 tratado" style="margin-bottom:10px;"></textarea>
       <label class="field-label">Participantes</label>
@@ -1010,13 +1368,15 @@ async function submitReuniao(userId){
   const horaInicio = document.getElementById("re-inicio").value;
   const horaFim = document.getElementById("re-fim").value;
   const local = document.getElementById("re-local").value.trim();
+  const salaId = document.getElementById("re-sala").value || null;
   const pauta = document.getElementById("re-pauta").value.trim();
   const participantes = [...document.querySelectorAll(".re-part:checked")].map(el => el.value);
   if(!titulo || !data){ toast("Preencha t\u00edtulo e data."); return; }
   const cu = getUser(userId);
   const { error } = await sb.from("reunioes").insert({
     titulo, data, hora_inicio: horaInicio || null, hora_fim: horaFim || null,
-    local: local || null, pauta: pauta || null, criado_por: userId, participantes
+    local: local || null, pauta: pauta || null, criado_por: userId, participantes,
+    sala_id: salaId, status: "confirmada"
   });
   if(error){ toast("Erro ao agendar: " + error.message); return; }
   participantes.forEach(pid => addNotif(pid, "reuniao_agendada",
@@ -1790,7 +2150,8 @@ function renderLoginForm(){
     <div class="input-icon-wrap"><span class="icon-left">&#128274;</span><input id="login-senha" type="password" placeholder="Sua senha" /><button type="button" class="icon-right" onclick="togglePasswordVisibility('login-senha', this)" aria-label="Mostrar senha">&#128065;</button></div>
     <button class="btn-cta" style="margin:8px 0 14px;" onclick="doLogin()" ${STATE.busy?'disabled':''}>${STATE.busy?'Entrando…':'Entrar &#8594;'}</button>
     <div class="auth-divider">ou</div>
-    <button style="width:100%;margin-bottom:14px;" onclick="openOrgFromMenu()"><span style="margin-right:6px;">&#9776;</span>Consultar organograma</button>
+    <button style="width:100%;margin-bottom:8px;" onclick="openOrgFromMenu()"><span style="margin-right:6px;">&#9776;</span>Consultar organograma</button>
+    <button style="width:100%;margin-bottom:14px;" onclick="openSalasFromMenu()"><span style="margin-right:6px;">&#127970;</span>Calendário das salas de reunião</button>
     <p style="text-align:center;font-size:13px;">Ainda não tem acesso? <button class="link-btn" onclick="STATE.authMode='signup';render()">Criar conta</button></p>
   `;
 }
