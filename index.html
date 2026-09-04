@@ -260,6 +260,9 @@ let STATE = {
   salaSelecionada: "todas",
   novaSalaOpen: false,
   salaViewMode: "cronograma",
+  salaSemanaOffset: 0,
+  ganttModo: "semana",
+  salaDia: null,
   publicoSala: "todas",
   publicoFormOpen: false,
   navOpen: false,
@@ -512,12 +515,12 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"escala", label:"Minha Escala", icon:"&#128197;" },
     { key:"agenda", label:"Agenda", icon:"&#128198;" },
     { key:"brainstorm", label:"Brainstorm", icon:"&#128161;" },
-    { key:"painelacoes", label:"Painel de A\u00e7\u00f5es", icon:"&#128203;" },
-    { key:"reunioes", label:"Reuni\u00f5es", icon:"&#128197;" },
-    { key:"salas", label:"Salas de reuni\u00e3o", icon:"&#127970;" },
-    ...(temAlgumPoder(cu) ? [{ key:"acoes", label:"A\u00e7\u00f5es setoriais", icon:"&#128204;" }] : []),
+    { key:"painelacoes", label:"Painel de Ações", icon:"&#128203;" },
+    { key:"reunioes", label:"Reuniões", icon:"&#128197;" },
+    { key:"salas", label:"Salas de reunião", icon:"&#127970;" },
+    ...(temAlgumPoder(cu) ? [{ key:"acoes", label:"Ações setoriais", icon:"&#128204;" }] : []),
     ...(ehMestre(cu) ? [{ key:"admin", label:"Todas as tarefas", icon:"&#128736;" }] : []),
-    ...(ehMestre(cu) ? [{ key:"permissoes", label:"Permiss\u00f5es", icon:"&#128273;" }] : []),
+    ...(ehMestre(cu) ? [{ key:"permissoes", label:"Permissões", icon:"&#128273;" }] : []),
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
     ...(hasTeam ? [{ key:"mapa", label:"Mapa da Equipe", icon:"&#128506;" }] : []),
     ...(getEquipesRelevantes(cu).length ? [{ key:"chat", label:"Chat da Equipe", icon:"&#128172;" }] : []),
@@ -955,7 +958,7 @@ function salvarNotaAgenda(userId, dataStr){
 }
 
 // ---------- Brainstorm ----------
-// ---------- Salas de reuni\u00e3o ----------
+// ---------- Salas de reunião ----------
 function salaNome(id){ const s = DB.salas.find(x => x.id === id); return s ? s.nome : null; }
 function reunioesDaSala(salaId, incluirSolicitadas){
   return DB.reunioes
@@ -972,40 +975,192 @@ function haConflito(r){
     o.hora_inicio < r.hora_fim && r.hora_inicio < o.hora_fim
   );
 }
-function renderGanttSalas(salaId){
-  const hoje = todayISO();
-  const fim = new Date(); fim.setDate(fim.getDate() + 29);
-  const fimStr = fim.toISOString().slice(0,10);
-  const lista = reunioesDaSala(salaId, true).filter(r => r.data >= hoje && r.data <= fimStr);
-  if(!lista.length) return `<p class="empty-hint">Nada agendado nos pr\u00f3ximos 30 dias.</p>`;
+const SETORES_EXTRA = { gestao:{ nome:"Gestão", cor:"#7c5cbf" }, operacao:{ nome:"Operação", cor:"#0f9b8e" } };
+function setorReuniao(id){
+  if(!id) return { nome:"Sem setor", cor:"var(--text-3)" };
+  const s = setorInfo(id);
+  if(s) return { nome:s.nome, cor:s.cor };
+  return SETORES_EXTRA[id] || { nome:id, cor:"var(--text-3)" };
+}
+function minutosDe(hhmm){
+  if(!hhmm) return null;
+  const [h,m] = hhmm.split(":").map(Number);
+  return h*60 + (m||0);
+}
+function mudarDiaSala(delta){
+  const d = new Date((STATE.salaDia || todayISO()) + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  STATE.salaDia = d.toISOString().slice(0,10);
+  render();
+}
+function renderGanttDia(salaId){
+  const dia = STATE.salaDia || todayISO();
+  const salas = (salaId === "todas" ? DB.salas.filter(s => s.ativa !== false) : DB.salas.filter(s => s.id === salaId));
+  const lista = reunioesDaSala(salaId, true).filter(r => r.data === dia);
 
-  const salas = salaId === "todas"
-    ? DB.salas.filter(s => lista.some(r => r.sala_id === s.id))
-    : DB.salas.filter(s => s.id === salaId);
-  const inicio = new Date(hoje + "T00:00:00");
-  const totalDias = 30;
-  const offset = d => Math.round((new Date(d+"T00:00:00") - inicio) / 86400000);
+  // janela de horas: cobre as reuniões do dia, mínimo 07h–19h
+  let minH = 7*60, maxH = 19*60;
+  lista.forEach(r => {
+    const i = minutosDe(r.hora_inicio), f = minutosDe(r.hora_fim);
+    if(i !== null) minH = Math.min(minH, Math.floor(i/60)*60);
+    if(f !== null) maxH = Math.max(maxH, Math.ceil(f/60)*60);
+  });
+  const janela = maxH - minH;
+  const horas = [];
+  for(let h = minH; h <= maxH; h += 60) horas.push(h);
+
+  const reguaTopo = `<div style="display:flex;gap:4px;margin-bottom:4px;">
+    <div style="width:120px;flex-shrink:0;"></div>
+    <div style="flex:1;position:relative;height:18px;">
+      ${horas.map(h => `<span class="mono" style="position:absolute;left:${((h-minH)/janela)*100}%;transform:translateX(-50%);font-size:9.5px;color:var(--text-3);">${String(Math.floor(h/60)).padStart(2,"0")}h</span>`).join("")}
+    </div>
+  </div>`;
 
   const linhas = salas.map(s => {
-    const barras = lista.filter(r => r.sala_id === s.id).map(r => {
-      const dia = offset(r.data);
-      if(dia < 0 || dia >= totalDias) return "";
-      const left = (dia / totalDias) * 100;
-      const width = (1 / totalDias) * 100;
-      const cor = r.status === "solicitada" ? "var(--warn)" : (haConflito(r) ? "var(--danger)" : "var(--brand-blue)");
-      return `<div title="${esc(r.titulo)} \u2014 ${fmtDate(r.data)}${r.hora_inicio?' '+esc(r.hora_inicio):''}${r.status==='solicitada'?' (solicitada)':''}"
-        style="position:absolute;left:${left}%;width:${Math.max(width,1.6)}%;top:4px;bottom:4px;background:${cor};border-radius:3px;"></div>`;
-    }).join("");
-    return `<div style="display:flex;align-items:center;gap:8px;height:34px;">
-      <div style="width:130px;flex-shrink:0;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.nome)}</div>
-      <div style="position:relative;flex:1;height:24px;background:var(--surface-2);border-radius:6px;">${barras}</div>
+    const doDia = lista.filter(r => r.sala_id === s.id && r.hora_inicio && r.hora_fim)
+      .sort((a,b) => minutosDe(a.hora_inicio) - minutosDe(b.hora_inicio));
+    const semHora = lista.filter(r => r.sala_id === s.id && (!r.hora_inicio || !r.hora_fim));
+
+    // distribui em faixas para que sobrepostas não se escondam
+    const faixas = [];
+    doDia.forEach(r => {
+      const ini = minutosDe(r.hora_inicio), fim = minutosDe(r.hora_fim);
+      let alvo = faixas.findIndex(f => f.every(o => minutosDe(o.hora_fim) <= ini || fim <= minutosDe(o.hora_inicio)));
+      if(alvo === -1){ faixas.push([r]); } else { faixas[alvo].push(r); }
+    });
+    const alturaLinha = Math.max(1, faixas.length) * 26 + 6;
+
+    const barras = faixas.map((faixa, fi) => faixa.map(r => {
+      const ini = minutosDe(r.hora_inicio), fim = minutosDe(r.hora_fim);
+      const left = ((ini - minH) / janela) * 100;
+      const width = ((fim - ini) / janela) * 100;
+      const st = setorReuniao(r.setor);
+      const conflito = haConflito(r);
+      return `<div title="${esc(r.titulo)} — ${esc(r.hora_inicio)}–${esc(r.hora_fim)} · ${esc(st.nome)}${r.status==='solicitada'?' (solicitada)':''}${conflito?' — CONFLITO':''}"
+        style="position:absolute;left:${left}%;width:${Math.max(width,3)}%;top:${fi*26+3}px;height:22px;background:${st.cor};
+               border-radius:4px;padding:2px 5px;color:#fff;font-size:9.5px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+               ${r.status==='solicitada'?'opacity:.65;border:1.5px dashed #fff;':''}${conflito?'box-shadow:0 0 0 2px var(--danger);':''}">
+        ${esc(r.hora_inicio)} ${esc(r.titulo)} · ${esc(st.nome)}
+      </div>`;
+    }).join("")).join("");
+
+    return `<div style="display:flex;gap:4px;align-items:stretch;margin-bottom:4px;">
+      <div style="width:120px;flex-shrink:0;display:flex;align-items:center;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.nome)}</div>
+      <div style="flex:1;position:relative;min-height:${alturaLinha}px;background:var(--surface-2);border-radius:6px;">
+        ${horas.map(h => `<div style="position:absolute;left:${((h-minH)/janela)*100}%;top:0;bottom:0;width:1px;background:var(--border);"></div>`).join("")}
+        ${barras}
+        ${semHora.length ? `<div class="muted-text" style="position:absolute;right:6px;top:4px;font-size:9.5px;">+${semHora.length} sem horário</div>` : ""}
+      </div>
     </div>`;
   }).join("");
 
+  const setoresUsados = [...new Set(lista.map(r => r.setor).filter(Boolean))];
+  const legenda = setoresUsados.length ? `<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px;">
+    ${setoresUsados.map(id => { const st = setorReuniao(id); return `<span class="row" style="gap:4px;"><span style="width:10px;height:10px;border-radius:3px;background:${st.cor};display:inline-block;"></span><span class="muted-text">${esc(st.nome)}</span></span>`; }).join("")}
+  </div>` : "";
+
+  const ehHoje = dia === todayISO();
   return `<div class="card" style="overflow-x:auto;">
-    <h3 style="margin-bottom:2px;">Ocupa\u00e7\u00e3o \u2014 pr\u00f3ximos 30 dias</h3>
-    <p class="muted-text" style="margin:0 0 10px;">azul = confirmada \u00b7 amarelo = solicitada \u00b7 vermelho = conflito de hor\u00e1rio</p>
-    <div style="min-width:460px;display:flex;flex-direction:column;gap:4px;">${linhas}</div>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <h3 style="margin:0 0 2px;">Ocupação por horário</h3>
+        <p class="muted-text" style="margin:0;">${fmtDate(dia)}${ehHoje?" · hoje":""}</p>
+      </div>
+      <div class="row" style="gap:4px;">
+        <button class="small ghost" onclick="mudarDiaSala(-1)" aria-label="Dia anterior">&#8592;</button>
+        ${!ehHoje ? `<button class="small" onclick="STATE.salaDia=todayISO();render()">Hoje</button>` : ""}
+        <button class="small ghost" onclick="mudarDiaSala(1)" aria-label="Próximo dia">&#8594;</button>
+      </div>
+    </div>
+    <p class="muted-text" style="margin:0 0 10px;">Cor = setor · tracejado = solicitada · contorno vermelho = conflito. Reuniões sobrepostas aparecem empilhadas.</p>
+    <div style="min-width:660px;">
+      ${reguaTopo}
+      ${salas.length ? linhas : `<p class="empty-hint">Nenhuma sala cadastrada.</p>`}
+    </div>
+    ${!lista.length && salas.length ? `<p class="empty-hint" style="padding:12px 0 0;">Nenhuma reserva nesse dia.</p>` : ""}
+    ${legenda}
+  </div>`;
+}
+function inicioDaSemana(offsetSemanas){
+  const d = new Date();
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate() - d.getDay() + (offsetSemanas || 0) * 7); // domingo da semana
+  return d;
+}
+function mudarSemanaSala(delta){
+  STATE.salaSemanaOffset = (STATE.salaSemanaOffset || 0) + delta;
+  render();
+}
+function renderGanttSalas(salaId){
+  const off = STATE.salaSemanaOffset || 0;
+  const inicio = inicioDaSemana(off);
+  const dias = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(inicio); d.setDate(d.getDate() + i);
+    return d.toISOString().slice(0,10);
+  });
+  const iniStr = dias[0], fimStr = dias[6];
+  const hoje = todayISO();
+
+  const lista = reunioesDaSala(salaId, true).filter(r => r.data >= iniStr && r.data <= fimStr);
+  const salas = (salaId === "todas" ? DB.salas.filter(s => s.ativa !== false) : DB.salas.filter(s => s.id === salaId));
+
+  const nomesDia = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+  const cabecalho = `<div style="display:flex;gap:4px;margin-bottom:6px;">
+    <div style="width:130px;flex-shrink:0;"></div>
+    ${dias.map((d, i) => {
+      const ehHoje = d === hoje;
+      return `<div style="flex:1;text-align:center;padding:4px 2px;border-radius:6px;${ehHoje?'background:var(--accent-bg);':''}">
+        <div style="font-size:10.5px;font-weight:800;color:var(--text-2);">${nomesDia[i]}</div>
+        <div class="mono" style="font-size:11px;font-weight:${ehHoje?'800':'600'};">${d.slice(8,10)}/${d.slice(5,7)}</div>
+      </div>`;
+    }).join("")}
+  </div>`;
+
+  const linhas = salas.map(s => {
+    const celulas = dias.map(d => {
+      const doDia = lista.filter(r => r.sala_id === s.id && r.data === d)
+        .sort((a,b) => (a.hora_inicio||"").localeCompare(b.hora_inicio||""));
+      const ehHoje = d === hoje;
+      return `<div style="flex:1;min-height:46px;background:${ehHoje?'var(--accent-bg)':'var(--surface-2)'};border-radius:6px;padding:3px;display:flex;flex-direction:column;gap:3px;">
+        ${doDia.map(r => {
+          const st = setorReuniao(r.setor);
+          const conflito = haConflito(r);
+          return `<div title="${esc(r.titulo)}${r.hora_inicio?' — '+esc(r.hora_inicio)+(r.hora_fim?'–'+esc(r.hora_fim):''):''} · ${esc(st.nome)}${r.status==='solicitada'?' (solicitada)':''}${conflito?' — CONFLITO':''}"
+            style="background:${st.cor};color:#fff;border-radius:4px;padding:2px 4px;font-size:9px;font-weight:700;line-height:1.25;overflow:hidden;
+                   ${r.status==='solicitada'?'opacity:.65;border:1.5px dashed #fff;':''}${conflito?'box-shadow:0 0 0 2px var(--danger);':''}">
+            ${r.hora_inicio?`<div class="mono" style="font-size:8.5px;opacity:.9;">${esc(r.hora_inicio)}</div>`:""}
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.titulo)}</div>
+            <div style="font-size:8px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(st.nome)}</div>
+          </div>`;
+        }).join("")}
+      </div>`;
+    }).join("");
+    return `<div style="display:flex;gap:4px;align-items:stretch;margin-bottom:4px;">
+      <div style="width:130px;flex-shrink:0;display:flex;align-items:center;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.nome)}</div>
+      ${celulas}
+    </div>`;
+  }).join("");
+
+  const rotuloSemana = off === 0 ? "Esta semana" : (off === 1 ? "Próxima semana" : (off === -1 ? "Semana passada" : `${fmtDate(iniStr)} a ${fmtDate(fimStr)}`));
+
+  return `<div class="card" style="overflow-x:auto;">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+      <div>
+        <h3 style="margin:0 0 2px;">Ocupação semanal</h3>
+        <p class="muted-text" style="margin:0;">${esc(rotuloSemana)} · ${fmtDate(iniStr)} a ${fmtDate(fimStr)}</p>
+      </div>
+      <div class="row" style="gap:4px;">
+        <button class="small ghost" onclick="mudarSemanaSala(-1)" aria-label="Semana anterior">&#8592;</button>
+        ${off !== 0 ? `<button class="small" onclick="STATE.salaSemanaOffset=0;render()">Hoje</button>` : ""}
+        <button class="small ghost" onclick="mudarSemanaSala(1)" aria-label="Próxima semana">&#8594;</button>
+      </div>
+    </div>
+    <p class="muted-text" style="margin:0 0 10px;">Cor = setor · tracejado = solicitada · contorno vermelho = conflito.</p>
+    <div style="min-width:620px;">
+      ${cabecalho}
+      ${salas.length ? linhas : `<p class="empty-hint">Nenhuma sala cadastrada.</p>`}
+    </div>
+    ${!lista.length && salas.length ? `<p class="empty-hint" style="padding:12px 0 0;">Nenhuma reserva nesta semana.</p>` : ""}
   </div>`;
 }
 function renderSalasContent(cu){
@@ -1013,16 +1168,16 @@ function renderSalasContent(cu){
   const pendentes = DB.reunioes.filter(r => r.sala_id && r.status === "solicitada");
   const lista = reunioesDaSala(STATE.salaSelecionada, true).filter(r => r.data >= todayISO());
 
-  return `<h1 style="margin-bottom:4px;">Salas de reuni\u00e3o</h1>
-  <p class="muted-text" style="margin-bottom:16px;">Cadastro das salas e cronograma de ocupa\u00e7\u00e3o, alimentado pelos agendamentos da aba Reuni\u00f5es.</p>
+  return `<h1 style="margin-bottom:4px;">Salas de reunião</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Cadastro das salas e cronograma de ocupação, alimentado pelos agendamentos da aba Reuniões.</p>
 
   ${pendentes.length ? `<div class="card" style="background:var(--warn-bg);border-color:#ecd8a0;margin-bottom:16px;">
-    <p style="font-size:12px;font-weight:700;color:var(--warn-text);margin:0 0 8px;">&#9888; ${pendentes.length} solicita\u00e7\u00e3o(\u00f5es) de sala aguardando confirma\u00e7\u00e3o</p>
+    <p style="font-size:12px;font-weight:700;color:var(--warn-text);margin:0 0 8px;">&#9888; ${pendentes.length} solicitação(ões) de sala aguardando confirmação</p>
     ${pendentes.map(r => `<div class="row" style="justify-content:space-between;padding:6px 0;border-top:1px solid #ecd8a0;flex-wrap:wrap;gap:6px;">
       <div style="min-width:0;flex:1;">
         <div style="font-size:13px;font-weight:700;">${esc(r.titulo)}</div>
-        <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} \u00b7 ${fmtDate(r.data)}${r.hora_inicio?` ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}</div>
-        <div class="muted-text">pedido por ${esc(r.solicitante_nome||'?')}${r.solicitante_contato?` \u00b7 ${esc(r.solicitante_contato)}`:''}</div>
+        <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} · ${fmtDate(r.data)}${r.hora_inicio?` ${esc(r.hora_inicio)}${r.hora_fim?'–'+esc(r.hora_fim):''}`:''}</div>
+        <div class="muted-text">pedido por ${esc(r.solicitante_nome||'?')}${r.solicitante_contato?` · ${esc(r.solicitante_contato)}`:''}</div>
         ${haConflito(r) ? `<div style="font-size:11.5px;color:var(--danger-text);font-weight:700;">&#9888; conflita com outra reserva</div>` : ""}
       </div>
       <div class="row" style="flex-shrink:0;">
@@ -1039,7 +1194,7 @@ function renderSalasContent(cu){
     </select>
     <div class="tabs" style="margin:0;">
       <button class="small ${STATE.salaViewMode==='cronograma'?'active':''}" onclick="STATE.salaViewMode='cronograma';render()">Cronograma</button>
-      <button class="small ${STATE.salaViewMode==='gantt'?'active':''}" onclick="STATE.salaViewMode='gantt';render()">Gr\u00e1fico de Gantt</button>
+      <button class="small ${STATE.salaViewMode==='gantt'?'active':''}" onclick="STATE.salaViewMode='gantt';render()">Gráfico de Gantt</button>
     </div>
     <button class="small" onclick="STATE.novaSalaOpen=!STATE.novaSalaOpen;render()"><span style="margin-right:4px;">+</span>Cadastrar sala</button>
   </div>
@@ -1047,20 +1202,26 @@ function renderSalasContent(cu){
   ${STATE.novaSalaOpen ? `<div class="card" style="margin-bottom:16px;">
     <h3 style="margin-bottom:10px;">Nova sala</h3>
     <label class="field-label">Nome</label>
-    <input id="sa-nome" placeholder="Ex: Sala de Reuni\u00e3o 3" style="margin-bottom:10px;" />
+    <input id="sa-nome" placeholder="Ex: Sala de Reunião 3" style="margin-bottom:10px;" />
     <div class="row" style="margin-bottom:10px;">
       <div style="flex:1;"><label class="field-label">Capacidade</label><input id="sa-capacidade" type="number" min="1" placeholder="10" /></div>
-      <div style="flex:2;"><label class="field-label">Localiza\u00e7\u00e3o</label><input id="sa-local" placeholder="Ex: 2\u00ba andar" /></div>
+      <div style="flex:2;"><label class="field-label">Localização</label><input id="sa-local" placeholder="Ex: 2º andar" /></div>
     </div>
     <label class="field-label">Recursos</label>
-    <input id="sa-recursos" placeholder="Ex: projetor, TV, videoconfer\u00eancia" style="margin-bottom:12px;" />
+    <input id="sa-recursos" placeholder="Ex: projetor, TV, videoconferência" style="margin-bottom:12px;" />
     <div class="row">
       <button class="ghost" onclick="STATE.novaSalaOpen=false;render()">Cancelar</button>
       <button class="primary" onclick="submitSala()">Cadastrar</button>
     </div>
   </div>` : ""}
 
-  ${STATE.salaViewMode === "gantt" ? renderGanttSalas(STATE.salaSelecionada) : `
+  ${STATE.salaViewMode === "gantt" ? `
+    <div class="tabs" style="margin:0 0 12px;">
+      <button class="small ${STATE.ganttModo!=='dia'?'active':''}" onclick="STATE.ganttModo='semana';render()">Semana</button>
+      <button class="small ${STATE.ganttModo==='dia'?'active':''}" onclick="STATE.ganttModo='dia';render()">Por horário (dia)</button>
+    </div>
+    ${STATE.ganttModo === "dia" ? renderGanttDia(STATE.salaSelecionada) : renderGanttSalas(STATE.salaSelecionada)}
+  ` : `
   <div style="display:flex;flex-direction:column;gap:8px;">
     ${lista.length ? lista.map(r => {
       const conflito = haConflito(r);
@@ -1068,7 +1229,7 @@ function renderSalasContent(cu){
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
           <div style="flex:1;min-width:200px;">
             <div style="font-size:14px;font-weight:700;">${esc(r.titulo)}</div>
-            <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} \u00b7 ${fmtDate(r.data)}${r.hora_inicio?` \u00b7 ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}</div>
+            <div class="muted-text mono">${esc(salaNome(r.sala_id)||'?')} · ${fmtDate(r.data)}${r.hora_inicio?` · ${esc(r.hora_inicio)}${r.hora_fim?'–'+esc(r.hora_fim):''}`:''}</div>
             ${r.pauta ? `<p class="muted-text" style="margin:6px 0 0;">${esc(r.pauta)}</p>` : ""}
             ${r.solicitante_nome ? `<div class="muted-text" style="font-size:11px;margin-top:4px;">solicitado por ${esc(r.solicitante_nome)}</div>` : ""}
           </div>
@@ -1086,7 +1247,7 @@ function renderSalasContent(cu){
     ${salas.map(s => `<div class="card row" style="justify-content:space-between;">
       <div>
         <div style="font-weight:700;font-size:13px;">${esc(s.nome)}</div>
-        <div class="muted-text">${s.capacidade?`${s.capacidade} lugares`:''}${s.localizacao?` \u00b7 ${esc(s.localizacao)}`:''}${s.recursos?` \u00b7 ${esc(s.recursos)}`:''}</div>
+        <div class="muted-text">${s.capacidade?`${s.capacidade} lugares`:''}${s.localizacao?` · ${esc(s.localizacao)}`:''}${s.recursos?` · ${esc(s.recursos)}`:''}</div>
       </div>
       ${ehMestre(cu) ? `<button class="small ghost" aria-label="Remover" onclick="removerSala('${s.id}')"><span style="color:var(--danger);">&#128465;</span></button>` : ""}
     </div>`).join("")}
@@ -1108,7 +1269,7 @@ async function submitSala(){
   await loadAll(); render();
 }
 async function removerSala(id){
-  if(!confirm("Remover essa sala? As reuni\u00f5es j\u00e1 agendadas nela ficam sem sala.")) return;
+  if(!confirm("Remover essa sala? As reuniões já agendadas nela ficam sem sala.")) return;
   const { error } = await sb.from("salas_reuniao").delete().eq("id", id);
   if(error){ toast("Erro: " + error.message); return; }
   await loadAll(); render();
@@ -1116,11 +1277,11 @@ async function removerSala(id){
 async function decidirSolicitacao(reuniaoId, novoStatus){
   const { error } = await sb.from("reunioes").update({ status: novoStatus }).eq("id", reuniaoId);
   if(error){ toast("Erro: " + error.message); return; }
-  toast(novoStatus === "confirmada" ? "Reserva confirmada." : "Solicita\u00e7\u00e3o recusada.");
+  toast(novoStatus === "confirmada" ? "Reserva confirmada." : "Solicitação recusada.");
   await loadAll(); render();
 }
 
-// ---------- Calend\u00e1rio p\u00fablico de salas (sem login) ----------
+// ---------- Calendário público de salas (sem login) ----------
 function renderSalasPublico(){
   const salas = DB.salas.filter(s => s.ativa !== false);
   const hoje = todayISO();
@@ -1135,7 +1296,7 @@ function renderSalasPublico(){
   <div class="container" style="max-width:820px;">
     <button class="ghost small" onclick="go('menu')" style="margin-bottom:16px;">&larr; Voltar</button>
     <h1 style="margin-bottom:4px;">Calendário das salas de reunião</h1>
-    <p class="muted-text" style="margin-bottom:18px;">Consulta aberta \u2014 mostra apenas a ocupa\u00e7\u00e3o das salas. Para solicitar uma reserva, use o formul\u00e1rio abaixo.</p>
+    <p class="muted-text" style="margin-bottom:18px;">Consulta aberta — mostra apenas a ocupação das salas. Para solicitar uma reserva, use o formulário abaixo.</p>
 
     <div class="row" style="gap:8px;margin-bottom:16px;flex-wrap:wrap;">
       <select style="width:auto;" onchange="STATE.publicoSala=this.value;render()">
@@ -1143,29 +1304,36 @@ function renderSalasPublico(){
         ${salas.map(s => `<option value="${s.id}" ${STATE.publicoSala===s.id?'selected':''}>${esc(s.nome)}</option>`).join("")}
       </select>
       <button class="primary" onclick="STATE.publicoFormOpen=!STATE.publicoFormOpen;render()">
-        ${STATE.publicoFormOpen ? "Fechar formul\u00e1rio" : "+ Solicitar reserva"}
+        ${STATE.publicoFormOpen ? "Fechar formulário" : "+ Solicitar reserva"}
       </button>
     </div>
 
     ${STATE.publicoFormOpen ? `<div class="card" style="margin-bottom:18px;">
       <h3 style="margin-bottom:4px;">Solicitar reserva de sala</h3>
-      <p class="muted-text" style="margin-bottom:12px;">Sua solicita\u00e7\u00e3o entra como pendente e ser\u00e1 confirmada por algu\u00e9m da equipe.</p>
+      <p class="muted-text" style="margin-bottom:12px;">Sua solicitação entra como pendente e será confirmada por alguém da equipe.</p>
       <label class="field-label">Seu nome</label>
       <input id="pb-nome" placeholder="Nome completo" style="margin-bottom:10px;" />
       <label class="field-label">Contato (e-mail ou ramal)</label>
-      <input id="pb-contato" placeholder="Para retorno da confirma\u00e7\u00e3o" style="margin-bottom:10px;" />
+      <input id="pb-contato" placeholder="Para retorno da confirmação" style="margin-bottom:10px;" />
       <label class="field-label">Sala</label>
       <select id="pb-sala" style="margin-bottom:10px;">
         ${salas.map(s => `<option value="${s.id}">${esc(s.nome)}${s.capacidade?` (${s.capacidade} lugares)`:''}</option>`).join("")}
       </select>
-      <label class="field-label">Assunto da reuni\u00e3o</label>
+      <label class="field-label">Setor</label>
+      <select id="pb-setor" style="margin-bottom:10px;">
+        <option value="">Sem setor definido</option>
+        ${SETORES.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join("")}
+        <option value="gestao">Gestão</option>
+        <option value="operacao">Operação</option>
+      </select>
+      <label class="field-label">Assunto da reunião</label>
       <input id="pb-titulo" placeholder="Ex: Alinhamento com fornecedor" style="margin-bottom:10px;" />
       <div class="row" style="margin-bottom:12px;">
         <div style="flex:1.2;"><label class="field-label">Data</label><input id="pb-data" type="date" /></div>
-        <div style="flex:1;"><label class="field-label">In\u00edcio</label><input id="pb-inicio" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Início</label><input id="pb-inicio" type="time" /></div>
         <div style="flex:1;"><label class="field-label">Fim</label><input id="pb-fim" type="time" /></div>
       </div>
-      <button class="primary" style="width:100%;" onclick="submitSolicitacaoPublica()">Enviar solicita\u00e7\u00e3o</button>
+      <button class="primary" style="width:100%;" onclick="submitSolicitacaoPublica()">Enviar solicitação</button>
     </div>` : ""}
 
     ${Object.keys(porDia).length ? Object.keys(porDia).sort().map(dia => `
@@ -1174,7 +1342,7 @@ function renderSalasPublico(){
         ${porDia[dia].map(a => `<div class="card row" style="justify-content:space-between;border-left:4px solid ${a.status==='solicitada'?'var(--warn)':'var(--brand-blue)'};">
           <div style="min-width:0;">
             <div style="font-size:13.5px;font-weight:700;">${esc(a.titulo)}</div>
-            <div class="muted-text mono">${esc(a.sala_nome)}${a.hora_inicio?` \u00b7 ${esc(a.hora_inicio)}${a.hora_fim?'\u2013'+esc(a.hora_fim):''}`:''}</div>
+            <div class="muted-text mono">${esc(a.sala_nome)}${a.hora_inicio?` · ${esc(a.hora_inicio)}${a.hora_fim?'–'+esc(a.hora_fim):''}`:''}</div>
           </div>
           <span class="badge ${a.status==='solicitada'?'warn':'ok'}">${a.status==='solicitada'?'Solicitada':'Confirmada'}</span>
         </div>`).join("")}
@@ -1186,31 +1354,32 @@ async function submitSolicitacaoPublica(){
   const contato = document.getElementById("pb-contato").value.trim();
   const salaId = document.getElementById("pb-sala").value;
   const titulo = document.getElementById("pb-titulo").value.trim();
+  const setorPb = document.getElementById("pb-setor").value || null;
   const data = document.getElementById("pb-data").value;
   const inicio = document.getElementById("pb-inicio").value;
   const fim = document.getElementById("pb-fim").value;
   if(nome.length < 3){ toast("Informe seu nome completo."); return; }
   if(!titulo || !data || !salaId){ toast("Preencha sala, assunto e data."); return; }
-  if(inicio && fim && fim <= inicio){ toast("O hor\u00e1rio de fim deve ser depois do in\u00edcio."); return; }
+  if(inicio && fim && fim <= inicio){ toast("O horário de fim deve ser depois do início."); return; }
 
   const conflito = DB.agendaPublica.some(a =>
     a.sala_id === salaId && a.data === data && inicio && fim && a.hora_inicio && a.hora_fim &&
     a.hora_inicio < fim && inicio < a.hora_fim);
-  if(conflito && !confirm("J\u00e1 existe reserva nesse hor\u00e1rio para essa sala. Enviar mesmo assim?")) return;
+  if(conflito && !confirm("Já existe reserva nesse horário para essa sala. Enviar mesmo assim?")) return;
 
   const { error } = await sb.from("reunioes").insert({
     titulo, data, hora_inicio: inicio || null, hora_fim: fim || null,
-    sala_id: salaId, status: "solicitada",
+    sala_id: salaId, setor: setorPb, status: "solicitada",
     solicitante_nome: nome, solicitante_contato: contato || null
   });
   if(error){ toast("Erro ao enviar: " + error.message); return; }
   STATE.publicoFormOpen = false;
-  toast("Solicita\u00e7\u00e3o enviada! Aguarde a confirma\u00e7\u00e3o.");
+  toast("Solicitação enviada! Aguarde a confirmação.");
   await loadPublicOrg();
   render();
 }
 
-// ---------- Administra\u00e7\u00e3o (somente mestre) ----------
+// ---------- Administração (somente mestre) ----------
 function filtrarTarefasAdmin(){
   let lista = DB.tarefas.slice();
   const termo = (STATE.adminBusca || "").trim().toLowerCase();
@@ -1238,7 +1407,7 @@ function adminLinhasHtml(){
             <span title="Prioridade ${esc(t.prioridade)}">${prioridadeIcon(t.prioridade)}</span>
             <span style="font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t.titulo)}</span>
           </div>
-          <div class="muted-text">${resp?esc(resp.nome):"sem respons\u00e1vel"} \u00b7 ${esc(temaNome(t.tema_id))} \u00b7 <span class="mono">${fmtDate(t.prazo)}</span>${si?` \u00b7 ${si.icon} ${esc(si.nome)}`:""}</div>
+          <div class="muted-text">${resp?esc(resp.nome):"sem responsável"} · ${esc(temaNome(t.tema_id))} · <span class="mono">${fmtDate(t.prazo)}</span>${si?` · ${si.icon} ${esc(si.nome)}`:""}</div>
         </div>
       </div>
       <div class="row" style="flex-shrink:0;gap:6px;">
@@ -1256,7 +1425,7 @@ function updateAdminBusca(){
   box.innerHTML = adminLinhasHtml();
 }
 function renderAdminContent(cu){
-  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usu\u00e1rio mestre tem acesso a esta tela.</p>`;
+  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usuário mestre tem acesso a esta tela.</p>`;
   const pessoas = DB.usuarios.filter(u => u.ativo !== false).sort((a,b) => a.nome.localeCompare(b.nome));
   const total = DB.tarefas.length;
   const atrasadas = DB.tarefas.filter(t => !["concluida","cancelada"].includes(t.status) && farolInfo(t).cls === "danger").length;
@@ -1272,7 +1441,7 @@ function renderAdminContent(cu){
   </div>
 
   <div class="row" style="gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-    <input id="admin-busca" placeholder="Buscar por t\u00edtulo..." value="${esc(STATE.adminBusca||'')}" oninput="updateAdminBusca()" style="max-width:260px;" />
+    <input id="admin-busca" placeholder="Buscar por título..." value="${esc(STATE.adminBusca||'')}" oninput="updateAdminBusca()" style="max-width:260px;" />
     <select style="width:auto;" onchange="STATE.adminPessoa=this.value;render()">
       <option value="todos">Todas as pessoas</option>
       ${pessoas.map(p => `<option value="${p.id}" ${STATE.adminPessoa===p.id?'selected':''}>${esc(p.nome)}</option>`).join("")}
@@ -1286,7 +1455,7 @@ function renderAdminContent(cu){
   <div id="admin-lista" style="display:flex;flex-direction:column;gap:8px;">${adminLinhasHtml()}</div>`;
 }
 
-// ---------- Reuni\u00f5es ----------
+// ---------- Reuniões ----------
 function renderReunioesContent(cu){
   const hoje = todayISO();
   const todas = DB.reunioes.slice().sort((a,b) => (a.data||"").localeCompare(b.data||""));
@@ -1303,7 +1472,7 @@ function renderReunioesContent(cu){
       <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
         <div style="flex:1;min-width:200px;">
           <div style="font-size:14px;font-weight:700;margin-bottom:3px;">${esc(r.titulo)}</div>
-          <div class="muted-text mono" style="margin-bottom:4px;">${fmtDate(r.data)}${r.hora_inicio?` \u00b7 ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}${r.local?` \u00b7 ${esc(r.local)}`:''}</div>
+          <div class="muted-text mono" style="margin-bottom:4px;">${fmtDate(r.data)}${r.hora_inicio?` · ${esc(r.hora_inicio)}${r.hora_fim?'–'+esc(r.hora_fim):''}`:''}${r.local?` · ${esc(r.local)}`:''}</div>
           ${r.pauta ? `<p class="muted-text" style="margin:0 0 6px;">${esc(r.pauta)}</p>` : ""}
           <div class="row" style="gap:4px;flex-wrap:wrap;">
             ${parts.slice(0,8).map(p => `<span title="${esc(p.nome)}">${avatarHtml(p,22)}</span>`).join("")}
@@ -1316,19 +1485,26 @@ function renderReunioesContent(cu){
     </div>`;
   };
 
-  return `<h1 style="margin-bottom:4px;">Reuni\u00f5es</h1>
-  <p class="muted-text" style="margin-bottom:16px;">Agende reuni\u00f5es e marque quem deve participar. Elas tamb\u00e9m aparecem na Agenda.</p>
+  return `<h1 style="margin-bottom:4px;">Reuniões</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Agende reuniões e marque quem deve participar. Elas também aparecem na Agenda.</p>
 
   <div style="margin-bottom:18px;">
     ${STATE.novaReuniaoOpen ? `<div class="card">
-      <h3 style="margin-bottom:10px;">Nova reuni\u00e3o</h3>
-      <label class="field-label">T\u00edtulo</label>
+      <h3 style="margin-bottom:10px;">Nova reunião</h3>
+      <label class="field-label">Título</label>
       <input id="re-titulo" placeholder="Ex: Alinhamento semanal de obra" style="margin-bottom:10px;" />
       <div class="row" style="margin-bottom:10px;">
         <div style="flex:1.2;"><label class="field-label">Data</label><input id="re-data" type="date" /></div>
-        <div style="flex:1;"><label class="field-label">In\u00edcio</label><input id="re-inicio" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Início</label><input id="re-inicio" type="time" /></div>
         <div style="flex:1;"><label class="field-label">Fim</label><input id="re-fim" type="time" /></div>
       </div>
+      <label class="field-label">Setor</label>
+      <select id="re-setor" style="margin-bottom:10px;">
+        <option value="">Sem setor definido</option>
+        ${SETORES.map(x => `<option value="${x.id}">${esc(x.nome)}</option>`).join("")}
+        <option value="gestao">Gestão</option>
+        <option value="operacao">Operação</option>
+      </select>
       <label class="field-label">Sala de reunião</label>
       <select id="re-sala" style="margin-bottom:10px;">
         <option value="">Sem sala (online ou externo)</option>
@@ -1337,24 +1513,24 @@ function renderReunioesContent(cu){
       <label class="field-label">Local (se não for sala)</label>
       <input id="re-local" placeholder="Ex: Teams / campo" style="margin-bottom:10px;" />
       <label class="field-label">Pauta</label>
-      <textarea id="re-pauta" rows="2" placeholder="O que ser\u00e1 tratado" style="margin-bottom:10px;"></textarea>
+      <textarea id="re-pauta" rows="2" placeholder="O que será tratado" style="margin-bottom:10px;"></textarea>
       <label class="field-label">Participantes</label>
       <div style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:12px;">
         ${pessoas.map(p => `<label class="row" style="gap:8px;padding:3px 0;cursor:pointer;">
           <input type="checkbox" class="re-part" value="${p.id}" style="width:auto;" />
-          <span style="font-size:12.5px;">${esc(p.nome)} \u2014 ${esc(p.cargo)}</span>
+          <span style="font-size:12.5px;">${esc(p.nome)} — ${esc(p.cargo)}</span>
         </label>`).join("")}
       </div>
       <div class="row">
         <button class="ghost" onclick="STATE.novaReuniaoOpen=false;render()">Cancelar</button>
-        <button class="primary" onclick="submitReuniao('${cu.id}')">Agendar reuni\u00e3o</button>
+        <button class="primary" onclick="submitReuniao('${cu.id}')">Agendar reunião</button>
       </div>
-    </div>` : `<button onclick="STATE.novaReuniaoOpen=true;render()"><span style="margin-right:4px;">+</span>Nova reuni\u00e3o</button>`}
+    </div>` : `<button onclick="STATE.novaReuniaoOpen=true;render()"><span style="margin-right:4px;">+</span>Nova reunião</button>`}
   </div>
 
-  <h3 style="margin-bottom:10px;">Pr\u00f3ximas</h3>
+  <h3 style="margin-bottom:10px;">Próximas</h3>
   <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">
-    ${proximas.length ? proximas.map(cardReuniao).join("") : `<p class="empty-hint">Nenhuma reuni\u00e3o agendada.</p>`}
+    ${proximas.length ? proximas.map(cardReuniao).join("") : `<p class="empty-hint">Nenhuma reunião agendada.</p>`}
   </div>
 
   ${passadas.length ? `<h3 style="margin-bottom:10px;">Realizadas</h3>
@@ -1369,30 +1545,31 @@ async function submitReuniao(userId){
   const horaFim = document.getElementById("re-fim").value;
   const local = document.getElementById("re-local").value.trim();
   const salaId = document.getElementById("re-sala").value || null;
+  const setor = document.getElementById("re-setor").value || null;
   const pauta = document.getElementById("re-pauta").value.trim();
   const participantes = [...document.querySelectorAll(".re-part:checked")].map(el => el.value);
-  if(!titulo || !data){ toast("Preencha t\u00edtulo e data."); return; }
+  if(!titulo || !data){ toast("Preencha título e data."); return; }
   const cu = getUser(userId);
   const { error } = await sb.from("reunioes").insert({
     titulo, data, hora_inicio: horaInicio || null, hora_fim: horaFim || null,
     local: local || null, pauta: pauta || null, criado_por: userId, participantes,
-    sala_id: salaId, status: "confirmada"
+    sala_id: salaId, setor, status: "confirmada"
   });
   if(error){ toast("Erro ao agendar: " + error.message); return; }
   participantes.forEach(pid => addNotif(pid, "reuniao_agendada",
-    `${cu.nome} agendou a reuni\u00e3o "${titulo}" para ${fmtDate(data)}${horaInicio?' \u00e0s '+horaInicio:''}`));
+    `${cu.nome} agendou a reunião "${titulo}" para ${fmtDate(data)}${horaInicio?' às '+horaInicio:''}`));
   STATE.novaReuniaoOpen = false;
-  toast("Reuni\u00e3o agendada.");
+  toast("Reunião agendada.");
   await loadAll(); render();
 }
 async function removerReuniao(id){
-  if(!confirm("Remover essa reuni\u00e3o?")) return;
+  if(!confirm("Remover essa reunião?")) return;
   const { error } = await sb.from("reunioes").delete().eq("id", id);
   if(error){ toast("Erro: " + error.message); return; }
   await loadAll(); render();
 }
 
-// ---------- Painel p\u00fablico de a\u00e7\u00f5es (somente leitura) ----------
+// ---------- Painel público de ações (somente leitura) ----------
 function statusAcao(t){
   if(t.status === "concluida") return { label:"Feito", cls:"ok" };
   if(t.status === "cancelada") return { label:"Cancelada", cls:"muted" };
@@ -1418,8 +1595,8 @@ function renderPainelAcoesContent(cu){
   const todas = DB.tarefas.filter(t => t.origem === "acao");
   const conta = lbl => todas.filter(t => statusAcao(t).label === lbl).length;
 
-  return `<h1 style="margin-bottom:4px;">Painel de A\u00e7\u00f5es</h1>
-  <p class="muted-text" style="margin-bottom:16px;">A\u00e7\u00f5es setoriais abertas para toda a empresa. Consulta aberta a todos \u2014 apenas o respons\u00e1vel e sua lideran\u00e7a podem atualizar.</p>
+  return `<h1 style="margin-bottom:4px;">Painel de Ações</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Ações setoriais abertas para toda a empresa. Consulta aberta a todos — apenas o responsável e sua liderança podem atualizar.</p>
 
   <div class="grid3" style="gap:10px;margin-bottom:16px;">
     <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--danger);">${conta("Atrasada")}</div><p class="muted-text" style="margin:0;">Atrasada(s)</p></div>
@@ -1454,8 +1631,8 @@ function renderPainelAcoesContent(cu){
             </div>
             ${t.instrucao ? `<p class="muted-text" style="margin:0 0 6px;">${esc(t.instrucao)}</p>` : ""}
             <p class="muted-text" style="margin:0;">
-              ${si ? si.icon + " " + esc(si.nome) + " \u00b7 " : ""}respons\u00e1vel: <strong>${alvo?esc(alvo.nome):"?"}</strong>
-              ${autor ? " \u00b7 aberta por " + esc(autor.nome) : ""}
+              ${si ? si.icon + " " + esc(si.nome) + " · " : ""}responsável: <strong>${alvo?esc(alvo.nome):"?"}</strong>
+              ${autor ? " · aberta por " + esc(autor.nome) : ""}
             </p>
           </div>
           <div style="text-align:right;flex-shrink:0;">
@@ -1465,14 +1642,14 @@ function renderPainelAcoesContent(cu){
           </div>
         </div>
       </div>`;
-    }).join("") : `<p class="empty-hint">Nenhuma a\u00e7\u00e3o nesse filtro.</p>`}
+    }).join("") : `<p class="empty-hint">Nenhuma ação nesse filtro.</p>`}
   </div>`;
 }
 
-// ---------- A\u00e7\u00f5es setoriais ----------
+// ---------- Ações setoriais ----------
 function renderAcoesContent(cu){
   const meusPoderes = poderesDe(cu);
-  if(!meusPoderes.length) return `<p class="empty-hint">Voc\u00ea n\u00e3o tem poder setorial atribu\u00eddo.</p>`;
+  if(!meusPoderes.length) return `<p class="empty-hint">Você não tem poder setorial atribuído.</p>`;
   if(!STATE.acaoSetor || !meusPoderes.includes(STATE.acaoSetor)) STATE.acaoSetor = meusPoderes[0];
 
   const pessoas = DB.usuarios.filter(u => u.ativo !== false && u.id !== cu.id)
@@ -1480,34 +1657,34 @@ function renderAcoesContent(cu){
   const minhasAcoes = DB.tarefas.filter(t => t.origem === "acao" && t.criado_por === cu.id)
     .sort((a,b) => (b.criado_em||"").localeCompare(a.criado_em||""));
 
-  return `<h1 style="margin-bottom:4px;">A\u00e7\u00f5es setoriais</h1>
-  <p class="muted-text" style="margin-bottom:16px;">Como respons\u00e1vel setorial, voc\u00ea pode atribuir uma a\u00e7\u00e3o a qualquer pessoa da empresa \u2014 independente da hierarquia.</p>
+  return `<h1 style="margin-bottom:4px;">Ações setoriais</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Como responsável setorial, você pode atribuir uma ação a qualquer pessoa da empresa — independente da hierarquia.</p>
 
   ${meusPoderes.length > 1 ? `<div class="tabs" style="margin-top:0;">
     ${meusPoderes.map(p => { const si = setorInfo(p); return `<button class="small ${STATE.acaoSetor===p?'active':''}" onclick="STATE.acaoSetor='${p}';render()">${si?si.icon+' '+esc(si.nome):esc(p)}</button>`; }).join("")}
   </div>` : `<p style="margin-bottom:12px;"><span class="badge accent">${(()=>{const si=setorInfo(STATE.acaoSetor);return si?si.icon+' '+esc(si.nome):esc(STATE.acaoSetor);})()}</span></p>`}
 
   <div class="card" style="margin-bottom:18px;">
-    <h3 style="margin-bottom:10px;">Nova a\u00e7\u00e3o</h3>
+    <h3 style="margin-bottom:10px;">Nova ação</h3>
     <label class="field-label">Atribuir para</label>
     <select id="ac-quem" style="margin-bottom:10px;">
-      ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)} \u2014 ${esc(p.cargo)}${equipeNome(p.equipe_id)?' ('+esc(equipeNome(p.equipe_id))+')':''}</option>`).join("")}
+      ${pessoas.map(p => `<option value="${p.id}">${esc(p.nome)} — ${esc(p.cargo)}${equipeNome(p.equipe_id)?' ('+esc(equipeNome(p.equipe_id))+')':''}</option>`).join("")}
     </select>
-    <label class="field-label">T\u00edtulo da a\u00e7\u00e3o</label>
+    <label class="field-label">Título da ação</label>
     <input id="ac-titulo" placeholder="O que precisa ser feito?" style="margin-bottom:10px;" />
     <label class="field-label">Tema</label>
     <select id="ac-tema" style="margin-bottom:10px;">${DB.temas.map(t=>`<option value="${t.id}">${esc(t.nome)}</option>`).join("")}</select>
     <div class="row" style="margin-bottom:10px;">
       <div style="flex:1;"><label class="field-label">Prioridade</label>
-        <select id="ac-prioridade"><option>Alta</option><option selected>M\u00e9dia</option><option>Baixa</option></select></div>
+        <select id="ac-prioridade"><option>Alta</option><option selected>Média</option><option>Baixa</option></select></div>
       <div style="flex:1;"><label class="field-label">Prazo</label><input id="ac-prazo" type="date" /></div>
     </div>
-    <label class="field-label">Instru\u00e7\u00e3o / o que deve ser feito</label>
-    <textarea id="ac-instrucao" rows="2" placeholder="Detalhe a a\u00e7\u00e3o para quem vai executar" style="margin-bottom:12px;"></textarea>
-    <button class="primary" style="width:100%;" onclick="submitAcao('${cu.id}')" ${STATE.submitting?'disabled':''}>${STATE.submitting?'Criando\u2026':'Atribuir a\u00e7\u00e3o'}</button>
+    <label class="field-label">Instrução / o que deve ser feito</label>
+    <textarea id="ac-instrucao" rows="2" placeholder="Detalhe a ação para quem vai executar" style="margin-bottom:12px;"></textarea>
+    <button class="primary" style="width:100%;" onclick="submitAcao('${cu.id}')" ${STATE.submitting?'disabled':''}>${STATE.submitting?'Criando…':'Atribuir ação'}</button>
   </div>
 
-  <h3 style="margin-bottom:10px;">A\u00e7\u00f5es que eu abri</h3>
+  <h3 style="margin-bottom:10px;">Ações que eu abri</h3>
   <div style="display:flex;flex-direction:column;gap:8px;">
     ${minhasAcoes.length ? minhasAcoes.map(t => {
       const alvo = getUser(t.atribuido_a);
@@ -1515,11 +1692,11 @@ function renderAcoesContent(cu){
       return `<div class="task-card row" style="justify-content:space-between;--strip:${farolStripColor(t)};" onclick="openTask('${t.id}')">
         <div class="row">${avatarHtml(alvo,26)}<div>
           <div style="font-size:13.5px;font-weight:700;">${esc(t.titulo)}</div>
-          <div class="muted-text">${alvo?esc(alvo.nome):'?'} \u00b7 <span class="mono">${fmtDate(t.prazo)}</span>${si?' \u00b7 '+si.icon+' '+esc(si.nome):''}</div>
+          <div class="muted-text">${alvo?esc(alvo.nome):'?'} · <span class="mono">${fmtDate(t.prazo)}</span>${si?' · '+si.icon+' '+esc(si.nome):''}</div>
         </div></div>
         ${badgeHtml(t)}
       </div>`;
-    }).join("") : `<p class="empty-hint">Voc\u00ea ainda n\u00e3o abriu nenhuma a\u00e7\u00e3o.</p>`}
+    }).join("") : `<p class="empty-hint">Você ainda não abriu nenhuma ação.</p>`}
   </div>`;
 }
 async function submitAcao(userId){
@@ -1540,23 +1717,23 @@ async function submitAcao(userId){
     criado_por: userId, atribuido_a: atribuidoA
   }).select().single();
   STATE.submitting = false;
-  if(error){ toast("Erro ao criar a\u00e7\u00e3o: " + error.message); render(); return; }
+  if(error){ toast("Erro ao criar ação: " + error.message); render(); return; }
   DB.tarefas.push(data);
-  addNotif(atribuidoA, "acao_atribuida", `${cu.nome} (${si?si.nome:'setor'}) atribuiu a a\u00e7\u00e3o "${titulo}" a voc\u00ea`, data.id);
-  toast("A\u00e7\u00e3o atribu\u00edda.");
+  addNotif(atribuidoA, "acao_atribuida", `${cu.nome} (${si?si.nome:'setor'}) atribuiu a ação "${titulo}" a você`, data.id);
+  toast("Ação atribuída.");
   render();
   lastManualLoadAt = Date.now();
   loadAll();
 }
 
-// ---------- Permiss\u00f5es (usu\u00e1rio mestre) ----------
+// ---------- Permissões (usuário mestre) ----------
 function renderPermissoesContent(cu){
-  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usu\u00e1rio mestre pode gerenciar permiss\u00f5es.</p>`;
+  if(!ehMestre(cu)) return `<p class="empty-hint">Somente o usuário mestre pode gerenciar permissões.</p>`;
   const pessoas = DB.usuarios.filter(u => u.ativo !== false).sort((a,b) => a.nome.localeCompare(b.nome));
-  return `<h1 style="margin-bottom:4px;">Permiss\u00f5es</h1>
-  <p class="muted-text" style="margin-bottom:16px;">Quem recebe um poder setorial pode atribuir a\u00e7\u00f5es a qualquer pessoa da empresa, mesmo fora da pr\u00f3pria equipe.</p>
+  return `<h1 style="margin-bottom:4px;">Permissões</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Quem recebe um poder setorial pode atribuir ações a qualquer pessoa da empresa, mesmo fora da própria equipe.</p>
   <div class="card" style="margin-bottom:16px;background:var(--info-bg);border-color:#c9dcea;">
-    <p style="font-size:12.5px;margin:0;">${SETORES.map(s=>`${s.icon} <strong>${esc(s.nome)}</strong>`).join(" \u00b7 ")}</p>
+    <p style="font-size:12.5px;margin:0;">${SETORES.map(s=>`${s.icon} <strong>${esc(s.nome)}</strong>`).join(" · ")}</p>
   </div>
   <div style="overflow-x:auto;">
   <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
@@ -1587,9 +1764,9 @@ async function togglePoder(usuarioId, setorId){
   if(atuais.has(setorId)) atuais.delete(setorId); else atuais.add(setorId);
   const novos = [...atuais];
   const { error } = await sb.from("usuarios").update({ poderes: novos }).eq("id", usuarioId);
-  if(error){ toast("Erro ao salvar permiss\u00e3o: " + error.message); render(); return; }
+  if(error){ toast("Erro ao salvar permissão: " + error.message); render(); return; }
   u.poderes = novos;
-  toast(`Permiss\u00f5es de ${u.nome.split(" ")[0]} atualizadas.`);
+  toast(`Permissões de ${u.nome.split(" ")[0]} atualizadas.`);
   render();
   lastManualLoadAt = Date.now();
   loadAll();
@@ -3246,14 +3423,14 @@ function renderSolicitacaoCancelamento(t, isOwner, podeGerenciar){
       </div>`;
     } else if(isOwner){
       html += `<div class="card" style="background:var(--surface-2);margin-bottom:14px;">
-        <p style="font-size:12.5px;margin:0;">&#8987; Voc\u00ea pediu o cancelamento desta tarefa \u2014 aguardando decis\u00e3o do seu l\u00edder.</p>
+        <p style="font-size:12.5px;margin:0;">&#8987; Você pediu o cancelamento desta tarefa — aguardando decisão do seu líder.</p>
       </div>`;
     }
   } else if(isOwner && !podeGerenciar && ["a_fazer","em_andamento","impedida"].includes(t.status)){
     html += STATE.solicitarCancelOpen === t.id ? `<div class="card" style="margin-bottom:14px;">
       <p style="font-size:13px;font-weight:700;margin:0 0 8px;">Solicitar cancelamento</p>
       <label class="field-label">Justificativa</label>
-      <textarea id="sc-justificativa" rows="2" placeholder="Por que essa tarefa n\u00e3o deve mais ser feita?" style="margin-bottom:10px;"></textarea>
+      <textarea id="sc-justificativa" rows="2" placeholder="Por que essa tarefa não deve mais ser feita?" style="margin-bottom:10px;"></textarea>
       <div class="row">
         <button class="ghost" onclick="STATE.solicitarCancelOpen=null;render()">Voltar</button>
         <button class="primary" onclick="solicitarCancelamento('${t.id}')">Enviar pedido</button>
@@ -3264,7 +3441,7 @@ function renderSolicitacaoCancelamento(t, isOwner, podeGerenciar){
 
   if(historico.length){
     html += `<div style="margin-bottom:14px;">${historico.map(s => `<p class="muted-text" style="font-size:11px;margin:2px 0;">
-      ${s.status==='aprovada'?'&#10003;':'&#10005;'} Cancelamento ${s.status==='aprovada'?'aprovado':'recusado'}${s.resposta_gestor?' \u2014 "'+esc(s.resposta_gestor)+'"':''}
+      ${s.status==='aprovada'?'&#10003;':'&#10005;'} Cancelamento ${s.status==='aprovada'?'aprovado':'recusado'}${s.resposta_gestor?' — "'+esc(s.resposta_gestor)+'"':''}
     </p>`).join("")}</div>`;
   }
   return html;
@@ -3281,7 +3458,7 @@ async function solicitarCancelamento(taskId){
     `${cu.nome} pediu o cancelamento de "${t?t.titulo:''}"`, taskId);
   if(t && t.origem === "acao" && t.criado_por && t.criado_por !== cu.lider_id)
     addNotif(t.criado_por, "cancelamento_solicitado",
-      `${cu.nome} pediu o cancelamento da a\u00e7\u00e3o "${t.titulo}"`, taskId);
+      `${cu.nome} pediu o cancelamento da ação "${t.titulo}"`, taskId);
   STATE.solicitarCancelOpen = null;
   toast("Pedido enviado.");
   await loadAll(); openTask(taskId);
@@ -3323,9 +3500,9 @@ function renderTransferirTarefa(t, cu){
   }
   return `<div class="card" style="margin-bottom:14px;">
     <p style="font-size:13px;font-weight:700;margin:0 0 10px;">Transferir tarefa</p>
-    <label class="field-label">Novo respons\u00e1vel</label>
+    <label class="field-label">Novo responsável</label>
     <select id="tr-quem" style="margin-bottom:10px;">
-      ${candidatos.map(u => `<option value="${u.id}">${esc(u.nome)} \u2014 ${esc(u.cargo)}</option>`).join("")}
+      ${candidatos.map(u => `<option value="${u.id}">${esc(u.nome)} — ${esc(u.cargo)}</option>`).join("")}
     </select>
     <label class="field-label">Prazo (mantido, ajuste se precisar)</label>
     <input id="tr-prazo" type="date" value="${t.prazo||''}" style="margin-bottom:10px;" />
@@ -3352,10 +3529,10 @@ async function confirmarTransferencia(taskId){
   const novo = getUser(novoResp);
   const antigo = getUser(antigoResp);
   addNotif(novoResp, "tarefa_transferida",
-    `${cu.nome} transferiu a tarefa "${t.titulo}" para voc\u00ea${motivo ? " \u2014 " + motivo : ""}`, taskId);
+    `${cu.nome} transferiu a tarefa "${t.titulo}" para você${motivo ? " — " + motivo : ""}`, taskId);
   if(antigoResp && antigoResp !== cu.id)
     addNotif(antigoResp, "tarefa_transferida",
-      `"${t.titulo}" saiu da sua lista \u2014 agora \u00e9 responsabilidade de ${novo?novo.nome:"outra pessoa"}`, taskId);
+      `"${t.titulo}" saiu da sua lista — agora é responsabilidade de ${novo?novo.nome:"outra pessoa"}`, taskId);
   if(motivo){
     sb.from("comentarios_tarefa").insert({ tarefa_id: taskId, usuario_id: cu.id, tipo:"comentario",
       texto: `Transferida de ${antigo?antigo.nome:"?"} para ${novo?novo.nome:"?"}: ${motivo}` }).then(()=>{});
@@ -3368,14 +3545,14 @@ async function confirmarTransferencia(taskId){
   render();
 }
 function renderEditarTarefa(t){
-  const rotulo = t.origem === "acao" ? "a\u00e7\u00e3o" : "tarefa";
+  const rotulo = t.origem === "acao" ? "ação" : "tarefa";
   if(STATE.editarTarefaId !== t.id){
     return `<button style="width:100%;margin-bottom:14px;" onclick="STATE.editarTarefaId='${t.id}';render()">
       <span style="margin-right:6px;">&#9998;</span>Editar ${rotulo}</button>`;
   }
   return `<div class="card" style="margin-bottom:14px;">
     <p style="font-size:13px;font-weight:700;margin:0 0 10px;">Editar ${rotulo}</p>
-    <label class="field-label">T\u00edtulo</label>
+    <label class="field-label">Título</label>
     <input id="ed-titulo" value="${esc(t.titulo)}" style="margin-bottom:10px;" />
     <label class="field-label">Tema</label>
     <select id="ed-tema" style="margin-bottom:10px;">
@@ -3385,7 +3562,7 @@ function renderEditarTarefa(t){
       <div style="flex:1;"><label class="field-label">Prioridade</label>
         <select id="ed-prioridade">
           <option ${t.prioridade==='Alta'?'selected':''}>Alta</option>
-          <option ${t.prioridade==='M\u00e9dia'?'selected':''}>M\u00e9dia</option>
+          <option ${t.prioridade==='Média'?'selected':''}>Média</option>
           <option ${t.prioridade==='Baixa'?'selected':''}>Baixa</option>
         </select></div>
       <div style="flex:1;"><label class="field-label">Prazo</label>
@@ -3393,7 +3570,7 @@ function renderEditarTarefa(t){
     </div>
     <div class="row">
       <button class="ghost" onclick="STATE.editarTarefaId=null;render()">Cancelar</button>
-      <button class="primary" onclick="salvarEdicaoTarefa('${t.id}')">Salvar altera\u00e7\u00f5es</button>
+      <button class="primary" onclick="salvarEdicaoTarefa('${t.id}')">Salvar alterações</button>
     </div>
   </div>`;
 }
@@ -3402,7 +3579,7 @@ async function salvarEdicaoTarefa(taskId){
   const temaId = document.getElementById("ed-tema").value;
   const prioridade = document.getElementById("ed-prioridade").value;
   const prazo = document.getElementById("ed-prazo").value;
-  if(!titulo){ toast("O t\u00edtulo n\u00e3o pode ficar vazio."); return; }
+  if(!titulo){ toast("O título não pode ficar vazio."); return; }
   const t = DB.tarefas.find(x => x.id === taskId);
   if(!t) return;
   const anterior = { titulo: t.titulo, tema_id: t.tema_id, prioridade: t.prioridade, prazo: t.prazo };
@@ -3417,7 +3594,7 @@ async function salvarEdicaoTarefa(taskId){
     openTask(taskId);
     return;
   }
-  toast("Altera\u00e7\u00f5es salvas.");
+  toast("Alterações salvas.");
   lastManualLoadAt = Date.now();
   loadAll();
 }
@@ -3579,7 +3756,7 @@ function renderTaskModal(){
       </div>
       <p class="muted-text" style="margin-bottom:10px;">${assignee?esc(assignee.nome):"Sem responsável"} · ${esc(temaNome(t.tema_id))} · prazo ${fmtDate(t.prazo)}</p>
       ${setorTarefa ? `<div class="card" style="background:var(--surface-2);margin-bottom:12px;padding:10px 12px;">
-        <p style="font-size:12.5px;margin:0;"><span class="badge" style="background:${setorTarefa.cor};color:#fff;">${setorTarefa.icon} A\u00e7\u00e3o de ${esc(setorTarefa.nome)}</span>
+        <p style="font-size:12.5px;margin:0;"><span class="badge" style="background:${setorTarefa.cor};color:#fff;">${setorTarefa.icon} Ação de ${esc(setorTarefa.nome)}</span>
         ${autorAcao ? ` &nbsp;aberta por <strong>${esc(autorAcao.nome)}</strong>` : ""}</p>
       </div>` : ""}
       <div class="row" style="margin-bottom:14px;gap:6px;">
@@ -3607,7 +3784,7 @@ function renderTaskModal(){
       ${(isLeaderOfOwner || isAutorAcao) && t.status === "impedida" ? `
         <button class="primary" style="width:100%;margin-bottom:14px;" onclick="resolverImpedimento('${t.id}')">Marcar impedimento como resolvido</button>` : ""}
       ${podeGerenciar && ["a_fazer","em_andamento","impedida"].includes(t.status) ? `
-        <button style="width:100%;margin-bottom:14px;color:var(--danger);" onclick="cancelarTarefa('${t.id}')">${t.origem === "acao" ? "Cancelar a\u00e7\u00e3o" : "Cancelar tarefa"}</button>` : ""}
+        <button style="width:100%;margin-bottom:14px;color:var(--danger);" onclick="cancelarTarefa('${t.id}')">${t.origem === "acao" ? "Cancelar ação" : "Cancelar tarefa"}</button>` : ""}
       ${renderChecklist(t.id)}
       <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
         <h3 style="margin-bottom:10px;">Comentários</h3>
