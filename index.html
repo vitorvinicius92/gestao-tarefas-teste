@@ -213,7 +213,7 @@ const SUPABASE_URL = "https://qnuyafjmsfabvsmxficp.supabase.co";
 const SUPABASE_KEY = "sb_publishable_F759-Bg_Lo2egqQ5yEjeCg_ffY3tlAg";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true } });
 
-let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [], mapasMentais: [] };
+let DB = { usuarios: [], tarefas: [], comentarios: [], notificacoes: [], temas: [], categorias: [], criterios: [], avaliacoes: [], avaliacoesNotas: [], equipes: [], especialidades: [], ferias: [], historico: [], escalas: [], subtarefas: [], reprogramacoes: [], mensagens: [], mapasMentais: [], cancelamentos: [], reunioes: [] };
 let SESSION = null;
 let deviosChart = null;
 let STATE = {
@@ -246,6 +246,14 @@ let STATE = {
   mindmapDonoId: null,
   mindmapBusca: "",
   mindmapCompartilharOpen: false,
+  acaoSetor: null,
+  painelSetor: "todos",
+  painelStatus: "todos",
+  editarTarefaId: null,
+  transferirTarefaId: null,
+  solicitarCancelOpen: null,
+  cancelRecusarOpen: null,
+  novaReuniaoOpen: false,
   navOpen: false,
   busy: false,
   submitting: false
@@ -307,7 +315,7 @@ async function loadPublicOrg(){
   if(!es.error) DB.especialidades = es.data || [];
 }
 async function loadAll(){
-  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg,mm] = await Promise.all([
+  const [u,t,c,n,tm,ci,ca,av,avn,eq,es,fe,hi,esc_,sub,rep,msg,mm,scl,reu] = await Promise.all([
     sb.from("usuarios").select("*"),
     sb.from("tarefas").select("*"),
     sb.from("comentarios_tarefa").select("*"),
@@ -325,7 +333,9 @@ async function loadAll(){
     sb.from("subtarefas").select("*"),
     sb.from("reprogramacoes").select("*"),
     sb.from("mensagens_equipe").select("*").order("criado_em", { ascending:true }),
-    sb.from("mapas_mentais").select("*")
+    sb.from("mapas_mentais").select("*"),
+    sb.from("solicitacoes_cancelamento").select("*"),
+    sb.from("reunioes").select("*")
   ]);
   if(!u.error) DB.usuarios = u.data || DB.usuarios;
   if(!t.error) DB.tarefas = t.data || DB.tarefas;
@@ -345,6 +355,8 @@ async function loadAll(){
   if(!rep.error) DB.reprogramacoes = rep.data || DB.reprogramacoes;
   if(!msg.error) DB.mensagens = msg.data || DB.mensagens;
   if(!mm.error) DB.mapasMentais = mm.data || DB.mapasMentais;
+  if(!scl.error) DB.cancelamentos = scl.data || DB.cancelamentos;
+  if(!reu.error) DB.reunioes = reu.data || DB.reunioes;
   rankingCache = {};
   cacheDataLocally();
 }
@@ -352,9 +364,10 @@ async function loadAll(){
 function getUser(id){ return DB.usuarios.find(u => u.id === id); }
 function getDirectReports(id){ return DB.usuarios.filter(u => u.lider_id === id && u.ativo !== false); }
 const SETORES = [
-  { id:"qualidade",  nome:"Qualidade",  icon:"&#9989;", cor:"var(--ok)" },
-  { id:"sesmt",      nome:"SESMT",      icon:"&#9937;", cor:"var(--danger)" },
-  { id:"engenharia", nome:"Engenharia", icon:"&#9881;", cor:"var(--info)" }
+  { id:"qualidade",    nome:"Qualidade",    icon:"&#9989;", cor:"var(--ok)" },
+  { id:"sesmt",        nome:"SESMT",        icon:"&#9937;", cor:"var(--danger)" },
+  { id:"engenharia",   nome:"Engenharia",   icon:"&#9881;", cor:"var(--info)" },
+  { id:"planejamento", nome:"Planejamento", icon:"&#128197;", cor:"var(--warn)" }
 ];
 function setorInfo(id){ return SETORES.find(s => s.id === id) || null; }
 function ehMestre(u){ return !!(u && u.is_mestre); }
@@ -373,8 +386,8 @@ function tasksForSubtree(id){
 function temaNome(id){ const t = DB.temas.find(x=>x.id===id); return t ? t.nome : "Geral"; }
 function equipeNome(id){ const e = DB.equipes.find(x=>x.id===id); return e ? e.nome : null; }
 function especialidadeNome(id){ const e = DB.especialidades.find(x=>x.id===id); return e ? e.nome : null; }
-function addNotif(usuarioId, tipo, mensagem){
-  return sb.from("notificacoes").insert({ usuario_id: usuarioId, tipo, mensagem });
+function addNotif(usuarioId, tipo, mensagem, tarefaId){
+  return sb.from("notificacoes").insert({ usuario_id: usuarioId, tipo, mensagem, tarefa_id: tarefaId || null });
 }
 
 function farolInfo(t){
@@ -460,6 +473,8 @@ function render(){
   else if(STATE.screen === "agenda") app.innerHTML = cu ? renderShell(cu, "agenda", "Agenda", renderAgendaContent(cu)) : renderMenu();
   else if(STATE.screen === "brainstorm") app.innerHTML = cu ? renderShell(cu, "brainstorm", "Brainstorm", renderBrainstormContent(cu)) : renderMenu();
   else if(STATE.screen === "acoes") app.innerHTML = cu ? renderShell(cu, "acoes", "Ações setoriais", renderAcoesContent(cu)) : renderMenu();
+  else if(STATE.screen === "painelacoes") app.innerHTML = cu ? renderShell(cu, "painelacoes", "Painel de Ações", renderPainelAcoesContent(cu)) : renderMenu();
+  else if(STATE.screen === "reunioes") app.innerHTML = cu ? renderShell(cu, "reunioes", "Reuniões", renderReunioesContent(cu)) : renderMenu();
   else if(STATE.screen === "permissoes") app.innerHTML = cu ? renderShell(cu, "permissoes", "Permissões", renderPermissoesContent(cu)) : renderMenu();
   else if(STATE.screen === "chat") app.innerHTML = cu ? renderShell(cu, "chat", "Chat da Equipe", renderChatContent(cu)) : renderMenu();
 
@@ -480,6 +495,8 @@ function renderShell(cu, activeKey, pageTitle, contentHtml){
     { key:"escala", label:"Minha Escala", icon:"&#128197;" },
     { key:"agenda", label:"Agenda", icon:"&#128198;" },
     { key:"brainstorm", label:"Brainstorm", icon:"&#128161;" },
+    { key:"painelacoes", label:"Painel de A\u00e7\u00f5es", icon:"&#128203;" },
+    { key:"reunioes", label:"Reuni\u00f5es", icon:"&#128197;" },
     ...(temAlgumPoder(cu) ? [{ key:"acoes", label:"A\u00e7\u00f5es setoriais", icon:"&#128204;" }] : []),
     ...(ehMestre(cu) ? [{ key:"permissoes", label:"Permiss\u00f5es", icon:"&#128273;" }] : []),
     ...(hasTeam ? [{ key:"equipe", label:"Minha equipe", icon:"&#128101;" }] : []),
@@ -537,6 +554,8 @@ function goSection(key){
   else if(key === "agenda") go("agenda");
   else if(key === "brainstorm") go("brainstorm");
   else if(key === "acoes") go("acoes");
+  else if(key === "painelacoes") go("painelacoes");
+  else if(key === "reunioes") go("reunioes");
   else if(key === "permissoes") go("permissoes");
   else if(key === "chat") go("chat");
   else if(key === "perfil") go("perfil");
@@ -853,9 +872,11 @@ function renderAgendaContent(cu){
   });
   DB.ferias.filter(f => f.usuario_id === cu.id).forEach(f => addEvento(f.data_inicio, "ferias", "Início de férias"));
   DB.escalas.filter(e => e.usuario_id === cu.id).forEach(e => addEvento(e.data_inicio, "escala", `${e.turno} · ${e.frente}`));
+  DB.reunioes.filter(r => r.criado_por === cu.id || (r.participantes||[]).includes(cu.id))
+    .forEach(r => addEvento(r.data, "reuniao", `${r.titulo}${r.hora_inicio?' às '+r.hora_inicio:''}`));
 
-  const iconePorTipo = { tarefa:"&#128203;", ferias:"&#127796;", escala:"&#128197;" };
-  const corPorTipo = { tarefa:"var(--danger)", ferias:"var(--ok)", escala:"var(--info)" };
+  const iconePorTipo = { tarefa:"&#128203;", ferias:"&#127796;", escala:"&#128197;", reuniao:"&#128101;" };
+  const corPorTipo = { tarefa:"var(--danger)", ferias:"var(--ok)", escala:"var(--info)", reuniao:"#7c5cbf" };
 
   let grid = `<div class="card">
     <div class="row" style="justify-content:space-between;margin-bottom:14px;">
@@ -912,6 +933,182 @@ function salvarNotaAgenda(userId, dataStr){
 }
 
 // ---------- Brainstorm ----------
+// ---------- Reuni\u00f5es ----------
+function renderReunioesContent(cu){
+  const hoje = todayISO();
+  const todas = DB.reunioes.slice().sort((a,b) => (a.data||"").localeCompare(b.data||""));
+  const proximas = todas.filter(r => r.data >= hoje);
+  const passadas = todas.filter(r => r.data < hoje).reverse().slice(0, 10);
+  const pessoas = DB.usuarios.filter(u => u.ativo !== false && u.id !== cu.id)
+    .sort((a,b) => a.nome.localeCompare(b.nome));
+
+  const cardReuniao = (r) => {
+    const autor = getUser(r.criado_por);
+    const parts = (r.participantes||[]).map(getUser).filter(Boolean);
+    const souDono = r.criado_por === cu.id || ehMestre(cu);
+    return `<div class="card" style="border-left:4px solid var(--brand-blue);">
+      <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:3px;">${esc(r.titulo)}</div>
+          <div class="muted-text mono" style="margin-bottom:4px;">${fmtDate(r.data)}${r.hora_inicio?` \u00b7 ${esc(r.hora_inicio)}${r.hora_fim?'\u2013'+esc(r.hora_fim):''}`:''}${r.local?` \u00b7 ${esc(r.local)}`:''}</div>
+          ${r.pauta ? `<p class="muted-text" style="margin:0 0 6px;">${esc(r.pauta)}</p>` : ""}
+          <div class="row" style="gap:4px;flex-wrap:wrap;">
+            ${parts.slice(0,8).map(p => `<span title="${esc(p.nome)}">${avatarHtml(p,22)}</span>`).join("")}
+            ${parts.length ? `<span class="muted-text" style="margin-left:4px;">${parts.length} participante(s)</span>` : `<span class="muted-text">Sem participantes marcados</span>`}
+          </div>
+          ${autor ? `<div class="muted-text" style="margin-top:4px;font-size:11px;">criada por ${esc(autor.nome)}</div>` : ""}
+        </div>
+        ${souDono ? `<button class="small ghost" aria-label="Remover" onclick="removerReuniao('${r.id}')"><span style="color:var(--danger);">&#128465;</span></button>` : ""}
+      </div>
+    </div>`;
+  };
+
+  return `<h1 style="margin-bottom:4px;">Reuni\u00f5es</h1>
+  <p class="muted-text" style="margin-bottom:16px;">Agende reuni\u00f5es e marque quem deve participar. Elas tamb\u00e9m aparecem na Agenda.</p>
+
+  <div style="margin-bottom:18px;">
+    ${STATE.novaReuniaoOpen ? `<div class="card">
+      <h3 style="margin-bottom:10px;">Nova reuni\u00e3o</h3>
+      <label class="field-label">T\u00edtulo</label>
+      <input id="re-titulo" placeholder="Ex: Alinhamento semanal de obra" style="margin-bottom:10px;" />
+      <div class="row" style="margin-bottom:10px;">
+        <div style="flex:1.2;"><label class="field-label">Data</label><input id="re-data" type="date" /></div>
+        <div style="flex:1;"><label class="field-label">In\u00edcio</label><input id="re-inicio" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Fim</label><input id="re-fim" type="time" /></div>
+      </div>
+      <label class="field-label">Local</label>
+      <input id="re-local" placeholder="Ex: Sala de reuni\u00e3o / Teams" style="margin-bottom:10px;" />
+      <label class="field-label">Pauta</label>
+      <textarea id="re-pauta" rows="2" placeholder="O que ser\u00e1 tratado" style="margin-bottom:10px;"></textarea>
+      <label class="field-label">Participantes</label>
+      <div style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:12px;">
+        ${pessoas.map(p => `<label class="row" style="gap:8px;padding:3px 0;cursor:pointer;">
+          <input type="checkbox" class="re-part" value="${p.id}" style="width:auto;" />
+          <span style="font-size:12.5px;">${esc(p.nome)} \u2014 ${esc(p.cargo)}</span>
+        </label>`).join("")}
+      </div>
+      <div class="row">
+        <button class="ghost" onclick="STATE.novaReuniaoOpen=false;render()">Cancelar</button>
+        <button class="primary" onclick="submitReuniao('${cu.id}')">Agendar reuni\u00e3o</button>
+      </div>
+    </div>` : `<button onclick="STATE.novaReuniaoOpen=true;render()"><span style="margin-right:4px;">+</span>Nova reuni\u00e3o</button>`}
+  </div>
+
+  <h3 style="margin-bottom:10px;">Pr\u00f3ximas</h3>
+  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;">
+    ${proximas.length ? proximas.map(cardReuniao).join("") : `<p class="empty-hint">Nenhuma reuni\u00e3o agendada.</p>`}
+  </div>
+
+  ${passadas.length ? `<h3 style="margin-bottom:10px;">Realizadas</h3>
+  <div style="display:flex;flex-direction:column;gap:8px;opacity:.75;">
+    ${passadas.map(cardReuniao).join("")}
+  </div>` : ""}`;
+}
+async function submitReuniao(userId){
+  const titulo = document.getElementById("re-titulo").value.trim();
+  const data = document.getElementById("re-data").value;
+  const horaInicio = document.getElementById("re-inicio").value;
+  const horaFim = document.getElementById("re-fim").value;
+  const local = document.getElementById("re-local").value.trim();
+  const pauta = document.getElementById("re-pauta").value.trim();
+  const participantes = [...document.querySelectorAll(".re-part:checked")].map(el => el.value);
+  if(!titulo || !data){ toast("Preencha t\u00edtulo e data."); return; }
+  const cu = getUser(userId);
+  const { error } = await sb.from("reunioes").insert({
+    titulo, data, hora_inicio: horaInicio || null, hora_fim: horaFim || null,
+    local: local || null, pauta: pauta || null, criado_por: userId, participantes
+  });
+  if(error){ toast("Erro ao agendar: " + error.message); return; }
+  participantes.forEach(pid => addNotif(pid, "reuniao_agendada",
+    `${cu.nome} agendou a reuni\u00e3o "${titulo}" para ${fmtDate(data)}${horaInicio?' \u00e0s '+horaInicio:''}`));
+  STATE.novaReuniaoOpen = false;
+  toast("Reuni\u00e3o agendada.");
+  await loadAll(); render();
+}
+async function removerReuniao(id){
+  if(!confirm("Remover essa reuni\u00e3o?")) return;
+  const { error } = await sb.from("reunioes").delete().eq("id", id);
+  if(error){ toast("Erro: " + error.message); return; }
+  await loadAll(); render();
+}
+
+// ---------- Painel p\u00fablico de a\u00e7\u00f5es (somente leitura) ----------
+function statusAcao(t){
+  if(t.status === "concluida") return { label:"Feito", cls:"ok" };
+  if(t.status === "cancelada") return { label:"Cancelada", cls:"muted" };
+  if(t.status === "impedida")  return { label:"Impedida", cls:"warn" };
+  const f = farolInfo(t);
+  if(f.cls === "danger") return { label:"Atrasada", cls:"danger" };
+  return { label:"No prazo", cls:"accent" };
+}
+function renderPainelAcoesContent(cu){
+  let acoes = DB.tarefas.filter(t => t.origem === "acao");
+
+  if(STATE.painelSetor && STATE.painelSetor !== "todos")
+    acoes = acoes.filter(t => t.setor_acao === STATE.painelSetor);
+  if(STATE.painelStatus && STATE.painelStatus !== "todos")
+    acoes = acoes.filter(t => statusAcao(t).label === STATE.painelStatus);
+
+  acoes.sort((a, b) => {
+    const rank = s => ({ "Atrasada":0, "Impedida":1, "No prazo":2, "Feito":3, "Cancelada":4 })[s] ?? 5;
+    const d = rank(statusAcao(a).label) - rank(statusAcao(b).label);
+    return d !== 0 ? d : (a.prazo || "").localeCompare(b.prazo || "");
+  });
+
+  const todas = DB.tarefas.filter(t => t.origem === "acao");
+  const conta = lbl => todas.filter(t => statusAcao(t).label === lbl).length;
+
+  return `<h1 style="margin-bottom:4px;">Painel de A\u00e7\u00f5es</h1>
+  <p class="muted-text" style="margin-bottom:16px;">A\u00e7\u00f5es setoriais abertas para toda a empresa. Consulta aberta a todos \u2014 apenas o respons\u00e1vel e sua lideran\u00e7a podem atualizar.</p>
+
+  <div class="grid3" style="gap:10px;margin-bottom:16px;">
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--danger);">${conta("Atrasada")}</div><p class="muted-text" style="margin:0;">Atrasada(s)</p></div>
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--info);">${conta("No prazo")}</div><p class="muted-text" style="margin:0;">No prazo</p></div>
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--warn);">${conta("Impedida")}</div><p class="muted-text" style="margin:0;">Impedida(s)</p></div>
+    <div class="card" style="text-align:center;"><div style="font-size:22px;font-weight:800;color:var(--ok);">${conta("Feito")}</div><p class="muted-text" style="margin:0;">Feito</p></div>
+  </div>
+
+  <div class="row" style="gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+    <select style="width:auto;" onchange="STATE.painelSetor=this.value;render()">
+      <option value="todos">Todos os setores</option>
+      ${SETORES.map(s => `<option value="${s.id}" ${STATE.painelSetor===s.id?'selected':''}>${esc(s.nome)}</option>`).join("")}
+    </select>
+    <select style="width:auto;" onchange="STATE.painelStatus=this.value;render()">
+      <option value="todos">Todos os status</option>
+      ${["Atrasada","No prazo","Impedida","Feito","Cancelada"].map(s => `<option value="${s}" ${STATE.painelStatus===s?'selected':''}>${s}</option>`).join("")}
+    </select>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    ${acoes.length ? acoes.map(t => {
+      const alvo = getUser(t.atribuido_a);
+      const autor = getUser(t.criado_por);
+      const si = setorInfo(t.setor_acao);
+      const st = statusAcao(t);
+      return `<div class="card" style="border-left:4px solid ${si?si.cor:'var(--border-strong)'};">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <div class="row" style="gap:6px;margin-bottom:4px;">
+              <span title="Prioridade ${esc(t.prioridade)}">${prioridadeIcon(t.prioridade)}</span>
+              <span style="font-size:14px;font-weight:700;">${esc(t.titulo)}</span>
+            </div>
+            ${t.instrucao ? `<p class="muted-text" style="margin:0 0 6px;">${esc(t.instrucao)}</p>` : ""}
+            <p class="muted-text" style="margin:0;">
+              ${si ? si.icon + " " + esc(si.nome) + " \u00b7 " : ""}respons\u00e1vel: <strong>${alvo?esc(alvo.nome):"?"}</strong>
+              ${autor ? " \u00b7 aberta por " + esc(autor.nome) : ""}
+            </p>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div class="mono" style="font-size:12px;margin-bottom:4px;">${fmtDate(t.prazo)}</div>
+            <span class="badge ${st.cls}">${st.label}</span>
+            <div style="margin-top:4px;"><span class="badge muted">${esc(t.prioridade)}</span></div>
+          </div>
+        </div>
+      </div>`;
+    }).join("") : `<p class="empty-hint">Nenhuma a\u00e7\u00e3o nesse filtro.</p>`}
+  </div>`;
+}
+
 // ---------- A\u00e7\u00f5es setoriais ----------
 function renderAcoesContent(cu){
   const meusPoderes = poderesDe(cu);
@@ -985,7 +1182,7 @@ async function submitAcao(userId){
   STATE.submitting = false;
   if(error){ toast("Erro ao criar a\u00e7\u00e3o: " + error.message); render(); return; }
   DB.tarefas.push(data);
-  addNotif(atribuidoA, "acao_atribuida", `${cu.nome} (${si?si.nome:'setor'}) atribuiu a a\u00e7\u00e3o "${titulo}" a voc\u00ea`);
+  addNotif(atribuidoA, "acao_atribuida", `${cu.nome} (${si?si.nome:'setor'}) atribuiu a a\u00e7\u00e3o "${titulo}" a voc\u00ea`, data.id);
   toast("A\u00e7\u00e3o atribu\u00edda.");
   render();
   lastManualLoadAt = Date.now();
@@ -1682,6 +1879,8 @@ function setupRealtime(){
     .on("postgres_changes", { event:"*", schema:"public", table:"ferias" }, handleRealtimeChange)
     .on("postgres_changes", { event:"*", schema:"public", table:"reprogramacoes" }, handleRealtimeChange)
     .on("postgres_changes", { event:"*", schema:"public", table:"mensagens_equipe" }, handleRealtimeChange)
+    .on("postgres_changes", { event:"*", schema:"public", table:"solicitacoes_cancelamento" }, handleRealtimeChange)
+    .on("postgres_changes", { event:"*", schema:"public", table:"reunioes" }, handleRealtimeChange)
     .subscribe();
 }
 function teardownRealtime(){
@@ -1823,10 +2022,26 @@ async function salvarPerfil(){
 }
 function renderNotifDrop(notifs){
   if(!notifs.length) return `<div class="notif-drop"><p class="empty-hint">Nenhuma notificação.</p></div>`;
-  return `<div class="notif-drop">${notifs.slice(0,20).map(n => `
-    <div class="notif-item ${n.lida?'':'unread'}" style="cursor:pointer;" onclick="markRead('${n.id}')">
-      ${esc(n.mensagem)}<div class="muted-text" style="margin-top:3px;">${new Date(n.criado_em).toLocaleString("pt-BR")}</div>
-    </div>`).join("")}</div>`;
+  return `<div class="notif-drop">${notifs.slice(0,20).map(n => {
+    const temTarefa = !!n.tarefa_id && DB.tarefas.some(t => t.id === n.tarefa_id);
+    return `<div class="notif-item ${n.lida?'':'unread'}" style="cursor:pointer;" onclick="abrirNotificacao('${n.id}', ${temTarefa ? `'${n.tarefa_id}'` : 'null'})">
+      ${esc(n.mensagem)}
+      <div class="row" style="justify-content:space-between;margin-top:3px;">
+        <span class="muted-text">${new Date(n.criado_em).toLocaleString("pt-BR")}</span>
+        ${temTarefa ? `<span class="muted-text" style="font-size:11px;">abrir &#8250;</span>` : ""}
+      </div>
+    </div>`;
+  }).join("")}</div>`;
+}
+async function abrirNotificacao(notifId, tarefaId){
+  const n = DB.notificacoes.find(x => x.id === notifId);
+  if(n && !n.lida){
+    n.lida = true;
+    sb.from("notificacoes").update({ lida:true }).eq("id", notifId).then(() => {});
+  }
+  STATE.notifOpen = false;
+  if(tarefaId){ openTask(tarefaId); }
+  else { render(); }
 }
 async function markRead(id){ await mutate(sb.from("notificacoes").update({ lida:true }).eq("id", id)); render(); }
 function setTab(t){ STATE.tab = t; STATE.view = "kanban"; render(); }
@@ -2031,7 +2246,7 @@ async function submitPropose(userId){
   STATE.submitting = false;
   if(error){ toast("Erro ao criar tarefa: " + error.message); render(); return; }
   DB.tarefas.push(data);
-  if(cu.lider_id) addNotif(cu.lider_id, "tarefa_criada", `${cu.nome} criou a tarefa "${titulo}"`);
+  if(cu.lider_id) addNotif(cu.lider_id, "tarefa_criada", `${cu.nome} criou a tarefa "${titulo}"`, data.id);
   STATE.showProposeForm = false;
   render();
   lastManualLoadAt = Date.now();
@@ -2647,6 +2862,204 @@ function renderTaskViews(tasks){
 }
 
 // ---------- Task modal ----------
+function renderSolicitacaoCancelamento(t, isOwner, podeGerenciar){
+  const pendente = DB.cancelamentos.find(s => s.tarefa_id === t.id && s.status === "pendente");
+  const historico = DB.cancelamentos.filter(s => s.tarefa_id === t.id && s.status !== "pendente")
+    .sort((a,b) => new Date(b.decidido_em||b.criado_em) - new Date(a.decidido_em||a.criado_em)).slice(0,2);
+  let html = "";
+
+  if(pendente){
+    const quem = getUser(pendente.solicitado_por);
+    if(podeGerenciar){
+      html += `<div class="card" style="background:var(--danger-bg);border-color:#f0c9c2;margin-bottom:14px;">
+        <p style="font-size:12px;font-weight:700;color:var(--danger-text);margin:0 0 6px;">&#9888; Pedido de cancelamento de ${quem?esc(quem.nome):"?"}</p>
+        <p style="font-size:12.5px;color:var(--text-2);margin:0 0 10px;">"${esc(pendente.justificativa)}"</p>
+        ${STATE.cancelRecusarOpen === pendente.id ? `
+          <label class="field-label">Motivo da recusa</label>
+          <textarea id="cancel-resposta" rows="2" style="margin-bottom:8px;" placeholder="Explique por que a tarefa deve continuar"></textarea>
+          <div class="row"><button class="ghost" onclick="STATE.cancelRecusarOpen=null;render()">Voltar</button><button class="primary" onclick="recusarCancelamento('${pendente.id}','${t.id}')">Confirmar recusa</button></div>
+        ` : `<div class="row">
+          <button class="ghost" onclick="STATE.cancelRecusarOpen='${pendente.id}';render()">Recusar</button>
+          <button class="primary" onclick="aprovarCancelamento('${pendente.id}','${t.id}')">Aprovar cancelamento</button>
+        </div>`}
+      </div>`;
+    } else if(isOwner){
+      html += `<div class="card" style="background:var(--surface-2);margin-bottom:14px;">
+        <p style="font-size:12.5px;margin:0;">&#8987; Voc\u00ea pediu o cancelamento desta tarefa \u2014 aguardando decis\u00e3o do seu l\u00edder.</p>
+      </div>`;
+    }
+  } else if(isOwner && !podeGerenciar && ["a_fazer","em_andamento","impedida"].includes(t.status)){
+    html += STATE.solicitarCancelOpen === t.id ? `<div class="card" style="margin-bottom:14px;">
+      <p style="font-size:13px;font-weight:700;margin:0 0 8px;">Solicitar cancelamento</p>
+      <label class="field-label">Justificativa</label>
+      <textarea id="sc-justificativa" rows="2" placeholder="Por que essa tarefa n\u00e3o deve mais ser feita?" style="margin-bottom:10px;"></textarea>
+      <div class="row">
+        <button class="ghost" onclick="STATE.solicitarCancelOpen=null;render()">Voltar</button>
+        <button class="primary" onclick="solicitarCancelamento('${t.id}')">Enviar pedido</button>
+      </div>
+    </div>` : `<button style="width:100%;margin-bottom:14px;" onclick="STATE.solicitarCancelOpen='${t.id}';render()">
+      <span style="margin-right:6px;">&#128683;</span>Solicitar cancelamento</button>`;
+  }
+
+  if(historico.length){
+    html += `<div style="margin-bottom:14px;">${historico.map(s => `<p class="muted-text" style="font-size:11px;margin:2px 0;">
+      ${s.status==='aprovada'?'&#10003;':'&#10005;'} Cancelamento ${s.status==='aprovada'?'aprovado':'recusado'}${s.resposta_gestor?' \u2014 "'+esc(s.resposta_gestor)+'"':''}
+    </p>`).join("")}</div>`;
+  }
+  return html;
+}
+async function solicitarCancelamento(taskId){
+  const justificativa = document.getElementById("sc-justificativa").value.trim();
+  if(!justificativa){ toast("Escreva a justificativa."); return; }
+  const cu = currentUser();
+  const t = DB.tarefas.find(x => x.id === taskId);
+  const { error } = await sb.from("solicitacoes_cancelamento")
+    .insert({ tarefa_id: taskId, solicitado_por: cu.id, justificativa });
+  if(error){ toast("Erro: " + error.message); return; }
+  if(cu.lider_id) addNotif(cu.lider_id, "cancelamento_solicitado",
+    `${cu.nome} pediu o cancelamento de "${t?t.titulo:''}"`, taskId);
+  if(t && t.origem === "acao" && t.criado_por && t.criado_por !== cu.lider_id)
+    addNotif(t.criado_por, "cancelamento_solicitado",
+      `${cu.nome} pediu o cancelamento da a\u00e7\u00e3o "${t.titulo}"`, taskId);
+  STATE.solicitarCancelOpen = null;
+  toast("Pedido enviado.");
+  await loadAll(); openTask(taskId);
+}
+async function aprovarCancelamento(solicId, taskId){
+  const { error } = await sb.from("tarefas").update({ status:"cancelada" }).eq("id", taskId);
+  if(error){ toast("Erro: " + error.message); return; }
+  await sb.from("solicitacoes_cancelamento").update({
+    status:"aprovada", decidido_por: STATE.currentUserId, decidido_em: new Date().toISOString()
+  }).eq("id", solicId);
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(t) addNotif(t.atribuido_a, "cancelamento_aprovado", `Sua tarefa "${t.titulo}" foi cancelada`, taskId);
+  toast("Cancelamento aprovado.");
+  closeTask();
+  await loadAll(); render();
+}
+async function recusarCancelamento(solicId, taskId){
+  const resposta = document.getElementById("cancel-resposta").value.trim();
+  const { error } = await sb.from("solicitacoes_cancelamento").update({
+    status:"recusada", resposta_gestor: resposta,
+    decidido_por: STATE.currentUserId, decidido_em: new Date().toISOString()
+  }).eq("id", solicId);
+  if(error){ toast("Erro: " + error.message); return; }
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(t) addNotif(t.atribuido_a, "cancelamento_recusado",
+    `Seu pedido de cancelamento de "${t.titulo}" foi recusado`, taskId);
+  STATE.cancelRecusarOpen = null;
+  await loadAll(); openTask(taskId);
+}
+function renderTransferirTarefa(t, cu){
+  if(!["a_fazer","em_andamento","impedida"].includes(t.status)) return "";
+  const candidatos = (ehMestre(cu) ? DB.usuarios.filter(u => u.ativo !== false) : getSubtreeMembers(cu.id))
+    .filter(u => u.id !== t.atribuido_a)
+    .sort((a,b) => a.nome.localeCompare(b.nome));
+  if(!candidatos.length) return "";
+  if(STATE.transferirTarefaId !== t.id){
+    return `<button style="width:100%;margin-bottom:14px;" onclick="STATE.transferirTarefaId='${t.id}';render()">
+      <span style="margin-right:6px;">&#8644;</span>Transferir para outra pessoa</button>`;
+  }
+  return `<div class="card" style="margin-bottom:14px;">
+    <p style="font-size:13px;font-weight:700;margin:0 0 10px;">Transferir tarefa</p>
+    <label class="field-label">Novo respons\u00e1vel</label>
+    <select id="tr-quem" style="margin-bottom:10px;">
+      ${candidatos.map(u => `<option value="${u.id}">${esc(u.nome)} \u2014 ${esc(u.cargo)}</option>`).join("")}
+    </select>
+    <label class="field-label">Prazo (mantido, ajuste se precisar)</label>
+    <input id="tr-prazo" type="date" value="${t.prazo||''}" style="margin-bottom:10px;" />
+    <label class="field-label">Motivo (opcional)</label>
+    <input id="tr-motivo" placeholder="Ex: realocado para outra frente" style="margin-bottom:12px;" />
+    <div class="row">
+      <button class="ghost" onclick="STATE.transferirTarefaId=null;render()">Cancelar</button>
+      <button class="primary" onclick="confirmarTransferencia('${t.id}')">Transferir</button>
+    </div>
+  </div>`;
+}
+async function confirmarTransferencia(taskId){
+  const novoResp = document.getElementById("tr-quem").value;
+  const novoPrazo = document.getElementById("tr-prazo").value;
+  const motivo = document.getElementById("tr-motivo").value.trim();
+  if(!novoResp) return;
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t) return;
+  const cu = currentUser();
+  const antigoResp = t.atribuido_a;
+  const { error } = await sb.from("tarefas")
+    .update({ atribuido_a: novoResp, prazo: novoPrazo || t.prazo }).eq("id", taskId);
+  if(error){ toast("Erro ao transferir: " + error.message); return; }
+  const novo = getUser(novoResp);
+  const antigo = getUser(antigoResp);
+  addNotif(novoResp, "tarefa_transferida",
+    `${cu.nome} transferiu a tarefa "${t.titulo}" para voc\u00ea${motivo ? " \u2014 " + motivo : ""}`, taskId);
+  if(antigoResp && antigoResp !== cu.id)
+    addNotif(antigoResp, "tarefa_transferida",
+      `"${t.titulo}" saiu da sua lista \u2014 agora \u00e9 responsabilidade de ${novo?novo.nome:"outra pessoa"}`, taskId);
+  if(motivo){
+    sb.from("comentarios_tarefa").insert({ tarefa_id: taskId, usuario_id: cu.id, tipo:"comentario",
+      texto: `Transferida de ${antigo?antigo.nome:"?"} para ${novo?novo.nome:"?"}: ${motivo}` }).then(()=>{});
+  }
+  STATE.transferirTarefaId = null;
+  toast("Tarefa transferida.");
+  closeTask();
+  lastManualLoadAt = Date.now();
+  await loadAll();
+  render();
+}
+function renderEditarTarefa(t){
+  const rotulo = t.origem === "acao" ? "a\u00e7\u00e3o" : "tarefa";
+  if(STATE.editarTarefaId !== t.id){
+    return `<button style="width:100%;margin-bottom:14px;" onclick="STATE.editarTarefaId='${t.id}';render()">
+      <span style="margin-right:6px;">&#9998;</span>Editar ${rotulo}</button>`;
+  }
+  return `<div class="card" style="margin-bottom:14px;">
+    <p style="font-size:13px;font-weight:700;margin:0 0 10px;">Editar ${rotulo}</p>
+    <label class="field-label">T\u00edtulo</label>
+    <input id="ed-titulo" value="${esc(t.titulo)}" style="margin-bottom:10px;" />
+    <label class="field-label">Tema</label>
+    <select id="ed-tema" style="margin-bottom:10px;">
+      ${DB.temas.map(x => `<option value="${x.id}" ${t.tema_id===x.id?'selected':''}>${esc(x.nome)}</option>`).join("")}
+    </select>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:1;"><label class="field-label">Prioridade</label>
+        <select id="ed-prioridade">
+          <option ${t.prioridade==='Alta'?'selected':''}>Alta</option>
+          <option ${t.prioridade==='M\u00e9dia'?'selected':''}>M\u00e9dia</option>
+          <option ${t.prioridade==='Baixa'?'selected':''}>Baixa</option>
+        </select></div>
+      <div style="flex:1;"><label class="field-label">Prazo</label>
+        <input id="ed-prazo" type="date" value="${t.prazo||''}" /></div>
+    </div>
+    <div class="row">
+      <button class="ghost" onclick="STATE.editarTarefaId=null;render()">Cancelar</button>
+      <button class="primary" onclick="salvarEdicaoTarefa('${t.id}')">Salvar altera\u00e7\u00f5es</button>
+    </div>
+  </div>`;
+}
+async function salvarEdicaoTarefa(taskId){
+  const titulo = document.getElementById("ed-titulo").value.trim();
+  const temaId = document.getElementById("ed-tema").value;
+  const prioridade = document.getElementById("ed-prioridade").value;
+  const prazo = document.getElementById("ed-prazo").value;
+  if(!titulo){ toast("O t\u00edtulo n\u00e3o pode ficar vazio."); return; }
+  const t = DB.tarefas.find(x => x.id === taskId);
+  if(!t) return;
+  const anterior = { titulo: t.titulo, tema_id: t.tema_id, prioridade: t.prioridade, prazo: t.prazo };
+  Object.assign(t, { titulo, tema_id: temaId, prioridade, prazo: prazo || t.prazo });
+  STATE.editarTarefaId = null;
+  openTask(taskId);
+  const { error } = await sb.from("tarefas")
+    .update({ titulo, tema_id: temaId, prioridade, prazo: prazo || t.prazo }).eq("id", taskId);
+  if(error){
+    Object.assign(t, anterior);
+    toast("Erro ao salvar: " + error.message);
+    openTask(taskId);
+    return;
+  }
+  toast("Altera\u00e7\u00f5es salvas.");
+  lastManualLoadAt = Date.now();
+  loadAll();
+}
 function renderInstrucao(t, isAncestorOfOwner){
   return `<div style="margin-bottom:14px;">
     <label class="field-label">Instrução do gestor</label>
@@ -2716,7 +3129,7 @@ async function solicitarReprogramacao(taskId){
   const ok = await mutate(sb.from("reprogramacoes").insert({
     tarefa_id: taskId, solicitado_por: cu.id, prazo_atual: t.prazo, prazo_sugerido: novoPrazo, justificativa
   }));
-  if(ok && cu.lider_id) await addNotif(cu.lider_id, "reprogramacao_solicitada", `${cu.nome} pediu pra mudar o prazo de "${t.titulo}"`);
+  if(ok && cu.lider_id) await addNotif(cu.lider_id, "reprogramacao_solicitada", `${cu.nome} pediu pra mudar o prazo de "${t.titulo}"`, taskId);
   STATE.reprogramarOpen = null;
   await loadAll(); openTask(taskId);
 }
@@ -2726,7 +3139,7 @@ async function aprovarReprogramacao(reprogId, taskId){
   if(okTarefa){
     await sb.from("reprogramacoes").update({ status:"aprovada", decidido_por: STATE.currentUserId, decidido_em: new Date().toISOString() }).eq("id", reprogId);
     const t = DB.tarefas.find(x => x.id === taskId);
-    if(t) await addNotif(t.atribuido_a, "reprogramacao_aprovada", `Seu novo prazo pra "${t.titulo}" foi aprovado: ${fmtDate(r.prazo_sugerido)}`);
+    if(t) await addNotif(t.atribuido_a, "reprogramacao_aprovada", `Seu novo prazo pra "${t.titulo}" foi aprovado: ${fmtDate(r.prazo_sugerido)}`, taskId);
   }
   await loadAll(); openTask(taskId);
 }
@@ -2740,7 +3153,7 @@ async function recusarReprogramacao(reprogId, taskId){
     await sb.from("tarefas").update({ prazo: novoPrazo }).eq("id", taskId);
   }
   const t = DB.tarefas.find(x => x.id === taskId);
-  if(ok && t) await addNotif(t.atribuido_a, "reprogramacao_recusada", `Seu pedido de novo prazo pra "${t.titulo}" foi recusado`);
+  if(ok && t) await addNotif(t.atribuido_a, "reprogramacao_recusada", `Seu pedido de novo prazo pra "${t.titulo}" foi recusado`, taskId);
   STATE.reprogramacaoRecusarOpen = null;
   await loadAll(); openTask(taskId);
 }
@@ -2783,7 +3196,7 @@ async function removerSubtarefa(id){
   openTask(STATE.openTaskId);
 }
 function openTask(id){ STATE.openTaskId = id; STATE.taskImpedimentoOpen = false; render(); }
-function closeTask(){ STATE.openTaskId = null; document.querySelectorAll(".modal-overlay").forEach(el=>el.remove()); }
+function closeTask(){ STATE.openTaskId = null; STATE.editarTarefaId = null; document.querySelectorAll(".modal-overlay").forEach(el=>el.remove()); }
 function renderTaskModal(){
   const t = DB.tarefas.find(x => x.id === STATE.openTaskId);
   if(!t) return "";
@@ -2793,7 +3206,7 @@ function renderTaskModal(){
   const isLeaderOfOwner = assignee && assignee.lider_id === cu.id;
   const isAncestorOfOwner = assignee && assignee.id !== cu.id && getSubtreeIds(cu.id).includes(assignee.id);
   const isAutorAcao = t.origem === "acao" && t.criado_por === cu.id;
-  const podeGerenciar = isAncestorOfOwner || isAutorAcao;
+  const podeGerenciar = isAncestorOfOwner || isAutorAcao || ehMestre(cu);
   const setorTarefa = setorInfo(t.setor_acao);
   const autorAcao = t.origem === "acao" ? getUser(t.criado_por) : null;
   const comments = DB.comentarios.filter(c => c.tarefa_id === t.id).sort((a,b)=>new Date(a.criado_em)-new Date(b.criado_em));
@@ -2827,10 +3240,13 @@ function renderTaskModal(){
           <option value="concluida" ${t.status==='concluida'?'selected':''}>Concluída</option>
         </select>` : ""}
       ${renderReprogramacao(t, isOwner, podeGerenciar)}
+      ${renderSolicitacaoCancelamento(t, isOwner, podeGerenciar)}
+      ${podeGerenciar ? renderEditarTarefa(t) : ""}
+      ${podeGerenciar ? renderTransferirTarefa(t, cu) : ""}
       ${(isLeaderOfOwner || isAutorAcao) && t.status === "impedida" ? `
         <button class="primary" style="width:100%;margin-bottom:14px;" onclick="resolverImpedimento('${t.id}')">Marcar impedimento como resolvido</button>` : ""}
       ${podeGerenciar && ["a_fazer","em_andamento","impedida"].includes(t.status) ? `
-        <button style="width:100%;margin-bottom:14px;color:var(--danger);" onclick="cancelarTarefa('${t.id}')">Cancelar tarefa</button>` : ""}
+        <button style="width:100%;margin-bottom:14px;color:var(--danger);" onclick="cancelarTarefa('${t.id}')">${t.origem === "acao" ? "Cancelar a\u00e7\u00e3o" : "Cancelar tarefa"}</button>` : ""}
       ${renderChecklist(t.id)}
       <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
         <h3 style="margin-bottom:10px;">Comentários</h3>
@@ -2954,7 +3370,7 @@ async function enviarImpedimento(taskId){
   if(ok){
     await sb.from("comentarios_tarefa").insert({ tarefa_id: taskId, usuario_id: cu.id, tipo:"impedimento", categoria_id: categoriaId,
       texto: `Falta ${recurso}. Não consigo avançar sem isso.` });
-    if(cu.lider_id) await addNotif(cu.lider_id, "impedimento_reportado", `${cu.nome} reportou impedimento em "${t.titulo}"`);
+    if(cu.lider_id) await addNotif(cu.lider_id, "impedimento_reportado", `${cu.nome} reportou impedimento em "${t.titulo}"`, taskId);
   }
   STATE.taskImpedimentoOpen = false;
   await loadAll(); openTask(taskId);
