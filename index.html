@@ -120,6 +120,17 @@
   h3{font-size:13.5px;font-weight:800;margin:0;text-transform:uppercase;letter-spacing:.03em;color:var(--text-2);}
   .muted-text{color:var(--text-2);font-size:12.5px;}
   .mono{font-family:var(--mono);font-size:11.5px;color:var(--text-3);}
+  .grade-desktop{display:block;}
+  .grade-mobile{display:none;}
+  @media(max-width:760px){
+    .grade-desktop{display:none;}
+    .grade-mobile{display:block;}
+  }
+  .dia-card{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:10px;}
+  .dia-card-header{background:var(--steel-900);color:#fff;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;}
+  .dia-card-body{padding:8px 12px;display:flex;flex-direction:column;gap:8px;}
+  .dia-item{display:flex;gap:8px;align-items:flex-start;}
+  .dia-hora{flex-shrink:0;width:82px;font-family:var(--mono);font-size:11px;color:var(--text-2);padding-top:2px;}
   .kanban-col{display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:var(--radius-lg);padding:12px;min-height:80px;transition:background .12s,box-shadow .12s;}
   .kanban-col-dragover{background:var(--accent-bg)!important;box-shadow:inset 0 0 0 2px var(--accent);}
   .task-card[draggable="true"]{cursor:grab;}
@@ -265,7 +276,7 @@ let STATE = {
   salaDia: null,
   publicoSala: "todas",
   publicoFormOpen: false,
-  publicoView: "lista",
+  publicoView: "semana",
   navOpen: false,
   busy: false,
   submitting: false
@@ -1177,6 +1188,32 @@ function renderGanttSalas(salaId, fonte){
       }).join("")}
     </tr>`).join("");
 
+  const cardsMobile = dias.map((d, i) => {
+    const doDia = lista.filter(r => r.data === d)
+      .sort((a,b) => (a.hora_inicio||"zz").localeCompare(b.hora_inicio||"zz"));
+    const ehHoje = d === hoje;
+    return `<div class="dia-card">
+      <div class="dia-card-header" style="${ehHoje?'background:var(--brand-blue);':''}">
+        <span style="font-weight:800;font-size:13px;">${nomesDia[i]}${ehHoje?" · hoje":""}</span>
+        <span class="mono" style="font-size:11px;opacity:.85;">${d.slice(8,10)}/${d.slice(5,7)}</span>
+      </div>
+      <div class="dia-card-body">
+        ${doDia.length ? doDia.map(r => {
+          const st = setorReuniao(r.setor);
+          const conflito = haConflito(r, fonte);
+          return `<div class="dia-item">
+            <div class="dia-hora">${r.hora_inicio ? esc(r.hora_inicio) + (r.hora_fim ? "–" + esc(r.hora_fim) : "") : "sem hora"}</div>
+            <div style="flex:1;min-width:0;border-left:3px solid ${st.cor};padding-left:8px;">
+              <div style="font-size:13px;font-weight:700;line-height:1.3;">${esc(r.titulo)}</div>
+              <div class="muted-text" style="font-size:11px;">${esc(st.nome)}${salaId==='todas'?` · ${esc(salaNome(r.sala_id)||'')}`:''}${r.status==='solicitada'?' · solicitada':''}${conflito?' · ⚠ conflito':''}</div>
+              <div class="muted-text" style="font-size:11px;">${esc(nomesResponsaveis(r))}</div>
+            </div>
+          </div>`;
+        }).join("") : `<p class="muted-text" style="margin:2px 0;font-size:12px;">Sem reuniões.</p>`}
+      </div>
+    </div>`;
+  }).join("");
+
   const rotulo = off === 0 ? "Esta semana" : (off === 1 ? "Próxima semana" : (off === -1 ? "Semana passada" : `${fmtDate(iniStr)} a ${fmtDate(fimStr)}`));
   const setoresUsados = [...new Set(lista.map(r => r.setor).filter(Boolean))];
 
@@ -1192,12 +1229,13 @@ function renderGanttSalas(salaId, fonte){
         <button class="small ghost" onclick="mudarSemanaSala(1)" aria-label="Próxima semana">&#8594;</button>
       </div>
     </div>
-    <div style="overflow-x:auto;">
+    <div class="grade-desktop" style="overflow-x:auto;">
       <table style="border-collapse:collapse;width:100%;min-width:1080px;background:var(--surface);">
         <thead>${cabecalho}</thead>
         <tbody>${linhas}</tbody>
       </table>
     </div>
+    <div class="grade-mobile">${cardsMobile}</div>
     ${semHorario.length ? `<p class="muted-text" style="margin-top:10px;">⚠ ${semHorario.length} reunião(ões) desta semana sem horário definido não aparecem na grade: ${semHorario.map(r=>esc(r.titulo)).join(", ")}.</p>` : ""}
     ${setoresUsados.length ? `<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px;">
       ${setoresUsados.map(id => { const st = setorReuniao(id); return `<span class="row" style="gap:4px;"><span style="width:10px;height:10px;border-radius:3px;background:${st.cor};display:inline-block;"></span><span class="muted-text">${esc(st.nome)}</span></span>`; }).join("")}
@@ -1338,7 +1376,11 @@ function renderSalasPublico(){
   <div class="container" style="max-width:820px;">
     <button class="ghost small" onclick="go('menu')" style="margin-bottom:16px;">&larr; Voltar</button>
     <h1 style="margin-bottom:4px;">Calendário das salas de reunião</h1>
-    <p class="muted-text" style="margin-bottom:18px;">Consulta aberta — mostra apenas a ocupação das salas. Para solicitar uma reserva, use o formulário abaixo.</p>
+    <p class="muted-text" style="margin-bottom:12px;">Consulta aberta — mostra apenas a ocupação das salas. Para solicitar uma reserva, use o formulário abaixo.</p>
+    <div class="card" style="background:var(--surface-2);padding:10px 12px;margin-bottom:16px;">
+      <p class="muted-text" style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Link desta consulta</p>
+      <p class="mono" style="margin:0;font-size:11.5px;word-break:break-all;">${esc(location.origin + location.pathname + "#salas")}</p>
+    </div>
 
     <div class="row" style="gap:8px;margin-bottom:16px;flex-wrap:wrap;">
       <select style="width:auto;" onchange="STATE.publicoSala=this.value;render()">
@@ -1379,8 +1421,8 @@ function renderSalasPublico(){
     </div>` : ""}
 
     <div class="tabs" style="margin:0 0 14px;">
-      <button class="small ${STATE.publicoView!=='semana'&&STATE.publicoView!=='dia'?'active':''}" onclick="STATE.publicoView='lista';render()">Lista</button>
       <button class="small ${STATE.publicoView==='semana'?'active':''}" onclick="STATE.publicoView='semana';render()">Grade semanal</button>
+      <button class="small ${STATE.publicoView!=='semana'&&STATE.publicoView!=='dia'?'active':''}" onclick="STATE.publicoView='lista';render()">Lista</button>
       <button class="small ${STATE.publicoView==='dia'?'active':''}" onclick="STATE.publicoView='dia';render()">Por horário (dia)</button>
     </div>
 
@@ -3981,6 +4023,15 @@ async function resolverImpedimento(taskId){
 // ---------- init ----------
 (async function init(){
   render();
+  const rota = (location.hash || "").replace("#", "").toLowerCase();
+  if(rota === "salas" || rota === "reunioes"){
+    try{
+      await loadPublicOrg();
+      STATE.screen = "salaspublico";
+      render();
+      return;
+    }catch(e){ /* sem conexão: segue o fluxo normal */ }
+  }
   try{
     const { data: { session }, error } = await sb.auth.getSession();
     if(error) throw error;
