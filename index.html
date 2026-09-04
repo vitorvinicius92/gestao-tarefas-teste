@@ -1304,7 +1304,7 @@ function renderSalasContent(cu){
   ` : `
   <div style="display:flex;flex-direction:column;gap:8px;">
     ${lista.length ? lista.map(r => {
-      const conflito = haConflito(r, fonte);
+      const conflito = haConflito(r);
       return `<div class="card" style="border-left:4px solid ${r.status==='solicitada'?'var(--warn)':(conflito?'var(--danger)':'var(--brand-blue)')};">
         <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
           <div style="flex:1;min-width:200px;">
