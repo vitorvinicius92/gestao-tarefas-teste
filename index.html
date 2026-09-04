@@ -1091,63 +1091,99 @@ function mudarSemanaSala(delta){
   STATE.salaSemanaOffset = (STATE.salaSemanaOffset || 0) + delta;
   render();
 }
+function nomesResponsaveis(r){
+  const nomes = (r.participantes || []).map(getUser).filter(Boolean).map(u => u.nome.split(" ")[0]);
+  if(r.solicitante_nome) nomes.unshift(r.solicitante_nome.split(" ")[0]);
+  if(!nomes.length){
+    const autor = getUser(r.criado_por);
+    if(autor) nomes.push(autor.nome.split(" ")[0]);
+  }
+  return nomes.length ? nomes.join(", ") : "\u2014";
+}
 function renderGanttSalas(salaId){
   const off = STATE.salaSemanaOffset || 0;
   const inicio = inicioDaSemana(off);
-  const dias = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(inicio); d.setDate(d.getDate() + i);
+  // segunda a sexta (a semana começa no domingo, então pulamos 1 dia)
+  const dias = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(inicio); d.setDate(d.getDate() + 1 + i);
     return d.toISOString().slice(0,10);
   });
-  const iniStr = dias[0], fimStr = dias[6];
+  const iniStr = dias[0], fimStr = dias[4];
   const hoje = todayISO();
-
   const lista = reunioesDaSala(salaId, true).filter(r => r.data >= iniStr && r.data <= fimStr);
-  const salas = (salaId === "todas" ? DB.salas.filter(s => s.ativa !== false) : DB.salas.filter(s => s.id === salaId));
 
-  const nomesDia = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
-  const cabecalho = `<div style="display:flex;gap:4px;margin-bottom:6px;">
-    <div style="width:130px;flex-shrink:0;"></div>
-    ${dias.map((d, i) => {
+  // faixa de horários: 08h às 18h, esticando se houver reunião fora
+  let minH = 8*60, maxH = 18*60;
+  lista.forEach(r => {
+    const i = minutosDe(r.hora_inicio), f = minutosDe(r.hora_fim);
+    if(i !== null) minH = Math.min(minH, Math.floor(i/60)*60);
+    if(f !== null) maxH = Math.max(maxH, Math.ceil(f/60)*60);
+  });
+  const faixas = [];
+  for(let h = minH; h < maxH; h += 60) faixas.push([h, h+60]);
+  const fmtH = m => String(Math.floor(m/60)).padStart(2,"0") + ":" + String(m%60).padStart(2,"0");
+
+  const nomesDia = ["Segunda","Terça","Quarta","Quinta","Sexta"];
+  const semHorario = lista.filter(r => !r.hora_inicio || !r.hora_fim);
+
+  const cabecalho = `<tr>
+    <th rowspan="2" style="background:#fbf1d6;border:1px solid var(--border-strong);padding:6px;font-size:11px;width:96px;">Horário</th>
+    ${dias.map((d,i) => {
       const ehHoje = d === hoje;
-      return `<div style="flex:1;text-align:center;padding:4px 2px;border-radius:6px;${ehHoje?'background:var(--accent-bg);':''}">
-        <div style="font-size:10.5px;font-weight:800;color:var(--text-2);">${nomesDia[i]}</div>
-        <div class="mono" style="font-size:11px;font-weight:${ehHoje?'800':'600'};">${d.slice(8,10)}/${d.slice(5,7)}</div>
-      </div>`;
+      return `<th colspan="2" style="border:1px solid var(--border-strong);padding:6px;font-size:11.5px;background:${ehHoje?'var(--accent-bg)':'var(--surface-2)'};">
+        ${nomesDia[i]}<div class="mono" style="font-weight:400;font-size:10px;color:var(--text-2);">${d.slice(8,10)}/${d.slice(5,7)}</div>
+      </th>`;
     }).join("")}
-  </div>`;
+  </tr>
+  <tr>
+    ${dias.map(() => `
+      <th style="border:1px solid var(--border-strong);padding:4px;font-size:9.5px;color:var(--text-2);background:var(--surface-2);width:150px;">ATIVIDADE</th>
+      <th style="border:1px solid var(--border-strong);padding:4px;font-size:9.5px;color:var(--text-2);background:var(--surface-2);width:110px;">RESPONSÁVEIS</th>
+    `).join("")}
+  </tr>`;
 
-  const linhas = salas.map(s => {
-    const celulas = dias.map(d => {
-      const doDia = lista.filter(r => r.sala_id === s.id && r.data === d)
-        .sort((a,b) => (a.hora_inicio||"").localeCompare(b.hora_inicio||""));
-      const ehHoje = d === hoje;
-      return `<div style="flex:1;min-height:46px;background:${ehHoje?'var(--accent-bg)':'var(--surface-2)'};border-radius:6px;padding:3px;display:flex;flex-direction:column;gap:3px;">
-        ${doDia.map(r => {
-          const st = setorReuniao(r.setor);
-          const conflito = haConflito(r);
-          return `<div title="${esc(r.titulo)}${r.hora_inicio?' — '+esc(r.hora_inicio)+(r.hora_fim?'–'+esc(r.hora_fim):''):''} · ${esc(st.nome)}${r.status==='solicitada'?' (solicitada)':''}${conflito?' — CONFLITO':''}"
-            style="background:${st.cor};color:#fff;border-radius:4px;padding:2px 4px;font-size:9px;font-weight:700;line-height:1.25;overflow:hidden;
-                   ${r.status==='solicitada'?'opacity:.65;border:1.5px dashed #fff;':''}${conflito?'box-shadow:0 0 0 2px var(--danger);':''}">
-            ${r.hora_inicio?`<div class="mono" style="font-size:8.5px;opacity:.9;">${esc(r.hora_inicio)}</div>`:""}
-            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.titulo)}</div>
-            <div style="font-size:8px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(st.nome)}</div>
-          </div>`;
-        }).join("")}
-      </div>`;
-    }).join("");
-    return `<div style="display:flex;gap:4px;align-items:stretch;margin-bottom:4px;">
-      <div style="width:130px;flex-shrink:0;display:flex;align-items:center;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.nome)}</div>
-      ${celulas}
-    </div>`;
-  }).join("");
+  const linhas = faixas.map(([ini, fim]) => `
+    <tr>
+      <td style="border:1px solid var(--border-strong);padding:4px;text-align:center;background:var(--surface-2);">
+        <span class="mono" style="font-size:10px;">${fmtH(ini)}</span>
+        <span class="mono" style="font-size:10px;color:var(--text-3);"> ${fmtH(fim)}</span>
+      </td>
+      ${dias.map(d => {
+        const naFaixa = lista.filter(r => {
+          if(r.data !== d) return false;
+          const i = minutosDe(r.hora_inicio), f = minutosDe(r.hora_fim);
+          if(i === null || f === null) return false;
+          return i < fim && ini < f;
+        });
+        const ehHoje = d === hoje;
+        const bg = ehHoje ? "background:#fbfdff;" : "";
+        if(!naFaixa.length) return `<td style="border:1px solid var(--border-strong);height:34px;${bg}"></td>
+                                    <td style="border:1px solid var(--border-strong);${bg}"></td>`;
+        return `<td style="border:1px solid var(--border-strong);padding:3px 5px;vertical-align:top;${bg}">
+            ${naFaixa.map(r => {
+              const st = setorReuniao(r.setor);
+              const conflito = haConflito(r);
+              return `<div title="${esc(r.titulo)} — ${esc(r.hora_inicio)}–${esc(r.hora_fim)}${r.status==='solicitada'?' (solicitada)':''}"
+                style="font-size:10px;font-weight:700;line-height:1.3;margin-bottom:2px;${r.status==='solicitada'?'opacity:.7;':''}">
+                <span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:${st.cor};margin-right:3px;"></span>${esc(r.titulo)}
+                <div style="font-weight:400;font-size:9px;color:${st.cor};">${esc(st.nome)}${salaId==='todas'?` · ${esc(salaNome(r.sala_id)||'')}`:''}${r.status==='solicitada'?' · solicitada':''}${conflito?' · ⚠ conflito':''}</div>
+              </div>`;
+            }).join("")}
+          </td>
+          <td style="border:1px solid var(--border-strong);padding:3px 5px;vertical-align:top;font-size:9.5px;color:var(--text-2);${bg}">
+            ${naFaixa.map(r => `<div style="margin-bottom:2px;line-height:1.3;">${esc(nomesResponsaveis(r))}</div>`).join("")}
+          </td>`;
+      }).join("")}
+    </tr>`).join("");
 
-  const rotuloSemana = off === 0 ? "Esta semana" : (off === 1 ? "Próxima semana" : (off === -1 ? "Semana passada" : `${fmtDate(iniStr)} a ${fmtDate(fimStr)}`));
+  const rotulo = off === 0 ? "Esta semana" : (off === 1 ? "Próxima semana" : (off === -1 ? "Semana passada" : `${fmtDate(iniStr)} a ${fmtDate(fimStr)}`));
+  const setoresUsados = [...new Set(lista.map(r => r.setor).filter(Boolean))];
 
   return `<div class="card" style="overflow-x:auto;">
-    <div class="row" style="justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
       <div>
-        <h3 style="margin:0 0 2px;">Ocupação semanal</h3>
-        <p class="muted-text" style="margin:0;">${esc(rotuloSemana)} · ${fmtDate(iniStr)} a ${fmtDate(fimStr)}</p>
+        <h3 style="margin:0 0 2px;">Agenda semanal</h3>
+        <p class="muted-text" style="margin:0;">${esc(rotulo)} · ${fmtDate(iniStr)} a ${fmtDate(fimStr)}</p>
       </div>
       <div class="row" style="gap:4px;">
         <button class="small ghost" onclick="mudarSemanaSala(-1)" aria-label="Semana anterior">&#8592;</button>
@@ -1155,12 +1191,17 @@ function renderGanttSalas(salaId){
         <button class="small ghost" onclick="mudarSemanaSala(1)" aria-label="Próxima semana">&#8594;</button>
       </div>
     </div>
-    <p class="muted-text" style="margin:0 0 10px;">Cor = setor · tracejado = solicitada · contorno vermelho = conflito.</p>
-    <div style="min-width:620px;">
-      ${cabecalho}
-      ${salas.length ? linhas : `<p class="empty-hint">Nenhuma sala cadastrada.</p>`}
+    <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;width:100%;min-width:1080px;background:var(--surface);">
+        <thead>${cabecalho}</thead>
+        <tbody>${linhas}</tbody>
+      </table>
     </div>
-    ${!lista.length && salas.length ? `<p class="empty-hint" style="padding:12px 0 0;">Nenhuma reserva nesta semana.</p>` : ""}
+    ${semHorario.length ? `<p class="muted-text" style="margin-top:10px;">⚠ ${semHorario.length} reunião(ões) desta semana sem horário definido não aparecem na grade: ${semHorario.map(r=>esc(r.titulo)).join(", ")}.</p>` : ""}
+    ${setoresUsados.length ? `<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px;">
+      ${setoresUsados.map(id => { const st = setorReuniao(id); return `<span class="row" style="gap:4px;"><span style="width:10px;height:10px;border-radius:3px;background:${st.cor};display:inline-block;"></span><span class="muted-text">${esc(st.nome)}</span></span>`; }).join("")}
+    </div>` : ""}
+    ${!lista.length ? `<p class="empty-hint" style="padding:12px 0 0;">Nenhuma reunião nesta semana.</p>` : ""}
   </div>`;
 }
 function renderSalasContent(cu){
@@ -1194,7 +1235,7 @@ function renderSalasContent(cu){
     </select>
     <div class="tabs" style="margin:0;">
       <button class="small ${STATE.salaViewMode==='cronograma'?'active':''}" onclick="STATE.salaViewMode='cronograma';render()">Cronograma</button>
-      <button class="small ${STATE.salaViewMode==='gantt'?'active':''}" onclick="STATE.salaViewMode='gantt';render()">Gráfico de Gantt</button>
+      <button class="small ${STATE.salaViewMode==='gantt'?'active':''}" onclick="STATE.salaViewMode='gantt';render()">Agenda semanal</button>
     </div>
     <button class="small" onclick="STATE.novaSalaOpen=!STATE.novaSalaOpen;render()"><span style="margin-right:4px;">+</span>Cadastrar sala</button>
   </div>
@@ -1217,7 +1258,7 @@ function renderSalasContent(cu){
 
   ${STATE.salaViewMode === "gantt" ? `
     <div class="tabs" style="margin:0 0 12px;">
-      <button class="small ${STATE.ganttModo!=='dia'?'active':''}" onclick="STATE.ganttModo='semana';render()">Semana</button>
+      <button class="small ${STATE.ganttModo!=='dia'?'active':''}" onclick="STATE.ganttModo='semana';render()">Grade semanal</button>
       <button class="small ${STATE.ganttModo==='dia'?'active':''}" onclick="STATE.ganttModo='dia';render()">Por horário (dia)</button>
     </div>
     ${STATE.ganttModo === "dia" ? renderGanttDia(STATE.salaSelecionada) : renderGanttSalas(STATE.salaSelecionada)}
