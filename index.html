@@ -1376,7 +1376,7 @@ function renderSalasPublico(){
   <div class="container" style="max-width:820px;">
     <button class="ghost small" onclick="go('menu')" style="margin-bottom:16px;">&larr; Voltar</button>
     <h1 style="margin-bottom:4px;">Calendário das salas de reunião</h1>
-    <p class="muted-text" style="margin-bottom:12px;">Consulta aberta — mostra apenas a ocupação das salas. Para solicitar uma reserva, use o formulário abaixo.</p>
+    <p class="muted-text" style="margin-bottom:12px;">Consulta aberta — mostra a ocupação das salas. Para reservar, use o botão abaixo.</p>
     <div class="card" style="background:var(--surface-2);padding:10px 12px;margin-bottom:16px;">
       <p class="muted-text" style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Link desta consulta</p>
       <p class="mono" style="margin:0;font-size:11.5px;word-break:break-all;">${esc(location.origin + location.pathname + "#salas")}</p>
@@ -1388,17 +1388,17 @@ function renderSalasPublico(){
         ${salas.map(s => `<option value="${s.id}" ${STATE.publicoSala===s.id?'selected':''}>${esc(s.nome)}</option>`).join("")}
       </select>
       <button class="primary" onclick="STATE.publicoFormOpen=!STATE.publicoFormOpen;render()">
-        ${STATE.publicoFormOpen ? "Fechar formulário" : "+ Solicitar reserva"}
+        ${STATE.publicoFormOpen ? "Fechar formulário" : "+ Reservar sala"}
       </button>
     </div>
 
     ${STATE.publicoFormOpen ? `<div class="card" style="margin-bottom:18px;">
-      <h3 style="margin-bottom:4px;">Solicitar reserva de sala</h3>
-      <p class="muted-text" style="margin-bottom:12px;">Sua solicitação entra como pendente e será confirmada por alguém da equipe.</p>
+      <h3 style="margin-bottom:4px;">Reservar sala</h3>
+      <p class="muted-text" style="margin-bottom:12px;">A reserva é confirmada na hora. Horários já ocupados não são aceitos.</p>
       <label class="field-label">Seu nome</label>
       <input id="pb-nome" placeholder="Nome completo" style="margin-bottom:10px;" />
       <label class="field-label">Contato (e-mail ou ramal)</label>
-      <input id="pb-contato" placeholder="Para retorno da confirmação" style="margin-bottom:10px;" />
+      <input id="pb-contato" placeholder="Para contato, se necessário" style="margin-bottom:10px;" />
       <label class="field-label">Sala</label>
       <select id="pb-sala" style="margin-bottom:10px;">
         ${salas.map(s => `<option value="${s.id}">${esc(s.nome)}${s.capacidade?` (${s.capacidade} lugares)`:''}</option>`).join("")}
@@ -1414,10 +1414,10 @@ function renderSalasPublico(){
       <input id="pb-titulo" placeholder="Ex: Alinhamento com fornecedor" style="margin-bottom:10px;" />
       <div class="row" style="margin-bottom:12px;">
         <div style="flex:1.2;"><label class="field-label">Data</label><input id="pb-data" type="date" /></div>
-        <div style="flex:1;"><label class="field-label">Início</label><input id="pb-inicio" type="time" /></div>
-        <div style="flex:1;"><label class="field-label">Fim</label><input id="pb-fim" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Início *</label><input id="pb-inicio" type="time" /></div>
+        <div style="flex:1;"><label class="field-label">Fim *</label><input id="pb-fim" type="time" /></div>
       </div>
-      <button class="primary" style="width:100%;" onclick="submitSolicitacaoPublica()">Enviar solicitação</button>
+      <button class="primary" style="width:100%;" onclick="submitSolicitacaoPublica()">Confirmar reserva</button>
     </div>` : ""}
 
     <div class="tabs" style="margin:0 0 14px;">
@@ -1446,31 +1446,37 @@ async function submitSolicitacaoPublica(){
   const nome = document.getElementById("pb-nome").value.trim();
   const contato = document.getElementById("pb-contato").value.trim();
   const salaId = document.getElementById("pb-sala").value;
-  const titulo = document.getElementById("pb-titulo").value.trim();
   const setorPb = document.getElementById("pb-setor").value || null;
+  const titulo = document.getElementById("pb-titulo").value.trim();
   const data = document.getElementById("pb-data").value;
   const inicio = document.getElementById("pb-inicio").value;
   const fim = document.getElementById("pb-fim").value;
+
   if(nome.length < 3){ toast("Informe seu nome completo."); return; }
   if(!titulo || !data || !salaId){ toast("Preencha sala, assunto e data."); return; }
-  if(inicio && fim && fim <= inicio){ toast("O horário de fim deve ser depois do início."); return; }
+  if(!inicio || !fim){ toast("Informe o horário de início e fim."); return; }
+  if(fim <= inicio){ toast("O horário de fim deve ser depois do início."); return; }
 
-  const conflito = DB.agendaPublica.some(a =>
-    a.sala_id === salaId && a.data === data && inicio && fim && a.hora_inicio && a.hora_fim &&
+  const choque = DB.agendaPublica.find(a =>
+    a.sala_id === salaId && a.data === data && a.hora_inicio && a.hora_fim &&
     a.hora_inicio < fim && inicio < a.hora_fim);
-  if(conflito && !confirm("Já existe reserva nesse horário para essa sala. Enviar mesmo assim?")) return;
+  if(choque){
+    toast(`Sala ocupada nesse horário: "${choque.titulo}" das ${choque.hora_inicio} às ${choque.hora_fim}. Escolha outro horário ou outra sala.`);
+    return;
+  }
 
   const { error } = await sb.from("reunioes").insert({
-    titulo, data, hora_inicio: inicio || null, hora_fim: fim || null,
-    sala_id: salaId, setor: setorPb, status: "solicitada",
+    titulo, data, hora_inicio: inicio, hora_fim: fim,
+    sala_id: salaId, setor: setorPb, status: "confirmada",
     solicitante_nome: nome, solicitante_contato: contato || null
   });
-  if(error){ toast("Erro ao enviar: " + error.message); return; }
+  if(error){ toast("Erro ao reservar: " + error.message); return; }
   STATE.publicoFormOpen = false;
-  toast("Solicitação enviada! Aguarde a confirmação.");
+  toast("Reserva confirmada!");
   await loadPublicOrg();
   render();
 }
+
 
 // ---------- Administração (somente mestre) ----------
 function filtrarTarefasAdmin(){
